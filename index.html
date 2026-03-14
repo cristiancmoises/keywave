@@ -1,0 +1,1416 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>KEYWAVE - Privacy That Flows.</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;600;900&family=Share+Tech+Mono&display=swap" rel="stylesheet">
+<script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/libsodium-wrappers@0.7.13/dist/modules/libsodium-wrappers.js"></script>
+<style>
+/* ══════════════════════════════════════════════════════════
+   ROOT & RESET
+══════════════════════════════════════════════════════════ */
+:root {
+  --bg:          #03040a;
+  --panel:       #080b14;
+  --panel2:      #0d1120;
+  --border:      #1a2540;
+  --border-hi:   #2a3f6a;
+  --neon:        #00ff9f;
+  --neon-dim:    #00995f;
+  --neon-glow:   rgba(0,255,159,0.18);
+  --blue:        #00cfff;
+  --blue-dim:    #0088aa;
+  --warn:        #ffbb00;
+  --danger:      #ff2d55;
+  --text:        #8899b0;
+  --text-hi:     #ccdaee;
+  --text-lo:     #2a3545;
+  --font-ui:     'Orbitron', monospace;
+  --font-mono:   'Share Tech Mono', monospace;
+  --radius:      4px;
+  --transition:  0.18s ease;
+}
+
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+html, body {
+  height: 100%;
+  background: var(--bg);
+  color: var(--text-hi);
+  font-family: var(--font-mono);
+  font-size: 14px;
+  line-height: 1.5;
+  overflow: hidden;
+  cursor: default;
+}
+
+/* Scanline overlay */
+body::before {
+  content: '';
+  position: fixed; inset: 0; z-index: 9999;
+  background: repeating-linear-gradient(
+    0deg,
+    transparent,
+    transparent 2px,
+    rgba(0,0,0,0.06) 2px,
+    rgba(0,0,0,0.06) 4px
+  );
+  pointer-events: none;
+}
+
+/* ══════════════════════════════════════════════════════════
+   UTILITIES
+══════════════════════════════════════════════════════════ */
+.hidden { display: none !important; }
+
+.neon { color: var(--neon); }
+.blue { color: var(--blue); }
+.warn { color: var(--warn); }
+.danger { color: var(--danger); }
+.dim { color: var(--text); }
+
+.glow {
+  text-shadow: 0 0 12px var(--neon), 0 0 30px rgba(0,255,159,0.3);
+}
+
+/* ══════════════════════════════════════════════════════════
+   SCREENS WRAPPER
+══════════════════════════════════════════════════════════ */
+#app {
+  width: 100vw;
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+/* ══════════════════════════════════════════════════════════
+   LANDING SCREEN
+══════════════════════════════════════════════════════════ */
+#screen-landing {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0;
+  padding: 40px 20px;
+}
+
+.logo-block {
+  text-align: center;
+  margin-bottom: 60px;
+}
+
+.logo-title {
+  font-family: var(--font-ui);
+  font-size: 52px;
+  font-weight: 900;
+  letter-spacing: 12px;
+  color: var(--neon);
+  text-shadow: 0 0 20px var(--neon), 0 0 60px rgba(0,255,159,0.25);
+  line-height: 1;
+}
+
+.logo-sub {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 5px;
+  color: var(--text);
+  margin-top: 12px;
+  text-transform: uppercase;
+}
+
+.cipher-badges {
+  display: flex;
+  gap: 12px;
+  justify-content: center;
+  margin-top: 20px;
+  flex-wrap: wrap;
+}
+
+.badge {
+  font-size: 10px;
+  letter-spacing: 2px;
+  padding: 4px 10px;
+  border: 1px solid var(--border-hi);
+  color: var(--blue);
+  border-radius: 2px;
+  background: rgba(0,207,255,0.05);
+  text-transform: uppercase;
+}
+
+.landing-card {
+  width: 100%;
+  max-width: 440px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+
+.card-section {
+  padding: 28px 32px;
+}
+
+.card-section + .card-section {
+  border-top: 1px solid var(--border);
+}
+
+.card-label {
+  font-family: var(--font-ui);
+  font-size: 10px;
+  letter-spacing: 3px;
+  color: var(--text);
+  text-transform: uppercase;
+  margin-bottom: 16px;
+}
+
+.btn {
+  font-family: var(--font-ui);
+  font-size: 11px;
+  letter-spacing: 3px;
+  padding: 12px 24px;
+  border: 1px solid;
+  border-radius: var(--radius);
+  cursor: pointer;
+  text-transform: uppercase;
+  transition: var(--transition);
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  background: transparent;
+}
+
+.btn-primary {
+  border-color: var(--neon);
+  color: var(--neon);
+}
+.btn-primary:hover {
+  background: var(--neon-glow);
+  box-shadow: 0 0 16px rgba(0,255,159,0.3);
+}
+
+.btn-secondary {
+  border-color: var(--blue);
+  color: var(--blue);
+}
+.btn-secondary:hover {
+  background: rgba(0,207,255,0.08);
+  box-shadow: 0 0 16px rgba(0,207,255,0.2);
+}
+
+.btn-danger {
+  border-color: var(--danger);
+  color: var(--danger);
+}
+.btn-danger:hover {
+  background: rgba(255,45,85,0.1);
+}
+
+.btn:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
+}
+
+.input-row {
+  display: flex;
+  gap: 8px;
+}
+
+.inp {
+  flex: 1;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--text-hi);
+  font-family: var(--font-mono);
+  font-size: 16px;
+  padding: 10px 14px;
+  letter-spacing: 3px;
+  text-transform: uppercase;
+  outline: none;
+  transition: var(--transition);
+}
+
+.inp:focus {
+  border-color: var(--blue);
+  box-shadow: 0 0 0 2px rgba(0,207,255,0.1);
+}
+
+.inp::placeholder {
+  color: var(--text-lo);
+  letter-spacing: 2px;
+  text-transform: uppercase;
+}
+
+/* ══════════════════════════════════════════════════════════
+   WAITING SCREEN
+══════════════════════════════════════════════════════════ */
+#screen-waiting {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 32px;
+  padding: 40px;
+}
+
+.wait-label {
+  font-family: var(--font-ui);
+  font-size: 10px;
+  letter-spacing: 4px;
+  color: var(--text);
+  text-transform: uppercase;
+}
+
+.room-id-display {
+  font-family: var(--font-ui);
+  font-size: 40px;
+  font-weight: 900;
+  letter-spacing: 16px;
+  color: var(--neon);
+  text-shadow: 0 0 20px var(--neon), 0 0 50px rgba(0,255,159,0.2);
+  text-align: center;
+  padding: 24px 36px;
+  border: 1px solid var(--neon-dim);
+  background: rgba(0,255,159,0.03);
+  border-radius: var(--radius);
+}
+
+.pulse-indicator {
+  width: 10px; height: 10px;
+  border-radius: 50%;
+  background: var(--warn);
+  box-shadow: 0 0 12px var(--warn);
+  animation: pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.4; transform: scale(0.7); }
+}
+
+.wait-hint {
+  font-size: 12px;
+  color: var(--text);
+  letter-spacing: 1px;
+  text-align: center;
+  max-width: 320px;
+}
+
+/* ══════════════════════════════════════════════════════════
+   SESSION SCREEN
+══════════════════════════════════════════════════════════ */
+#screen-session {
+  flex: 1;
+  display: grid;
+  grid-template-rows: 48px 1fr 52px;
+  grid-template-columns: 1fr 360px;
+  grid-template-areas:
+    "header  header"
+    "video   chat"
+    "controls controls";
+  min-height: 0;
+}
+
+/* ── Header ── */
+#session-header {
+  grid-area: header;
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  padding: 0 20px;
+  border-bottom: 1px solid var(--border);
+  background: var(--panel);
+}
+
+.header-logo {
+  font-family: var(--font-ui);
+  font-size: 14px;
+  font-weight: 900;
+  letter-spacing: 6px;
+  color: var(--neon);
+  text-shadow: 0 0 10px rgba(0,255,159,0.5);
+}
+
+.header-sep { color: var(--text-lo); }
+
+.header-room {
+  font-size: 12px;
+  letter-spacing: 3px;
+  color: var(--blue);
+}
+
+.header-status {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.status-pill {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  letter-spacing: 1px;
+  color: var(--text);
+}
+
+.dot {
+  width: 7px; height: 7px;
+  border-radius: 50%;
+  background: var(--text-lo);
+  flex-shrink: 0;
+  transition: var(--transition);
+}
+.dot.active { background: var(--neon); box-shadow: 0 0 8px var(--neon); }
+.dot.warn   { background: var(--warn); box-shadow: 0 0 8px var(--warn); animation: pulse 1.4s infinite; }
+.dot.error  { background: var(--danger); box-shadow: 0 0 8px var(--danger); }
+
+/* ── Video Panel ── */
+#video-panel {
+  grid-area: video;
+  position: relative;
+  background: #000;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+#remote-video {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  background: #000;
+}
+
+#local-video {
+  position: absolute;
+  bottom: 16px;
+  right: 16px;
+  width: 140px;
+  height: 90px;
+  object-fit: cover;
+  border: 1px solid var(--border-hi);
+  border-radius: var(--radius);
+  background: #000;
+  z-index: 10;
+}
+
+.video-overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  background: rgba(3,4,10,0.85);
+  z-index: 5;
+  transition: opacity 0.3s;
+}
+.video-overlay.hidden { display: none; }
+
+.overlay-icon {
+  font-size: 36px;
+  opacity: 0.4;
+}
+
+.overlay-text {
+  font-size: 12px;
+  letter-spacing: 2px;
+  color: var(--text);
+}
+
+.e2e-badge {
+  position: absolute;
+  top: 12px;
+  left: 12px;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 10px;
+  letter-spacing: 2px;
+  padding: 4px 10px;
+  border: 1px solid rgba(0,255,159,0.3);
+  border-radius: 2px;
+  background: rgba(0,0,0,0.6);
+  color: var(--neon-dim);
+  backdrop-filter: blur(4px);
+  text-transform: uppercase;
+}
+.e2e-badge.active { color: var(--neon); border-color: rgba(0,255,159,0.6); }
+
+/* ── Chat Panel ── */
+#chat-panel {
+  grid-area: chat;
+  display: flex;
+  flex-direction: column;
+  border-left: 1px solid var(--border);
+  background: var(--panel);
+  min-height: 0;
+}
+
+#messages-area {
+  flex: 1;
+  overflow-y: auto;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-height: 0;
+}
+
+#messages-area::-webkit-scrollbar { width: 4px; }
+#messages-area::-webkit-scrollbar-track { background: transparent; }
+#messages-area::-webkit-scrollbar-thumb { background: var(--border-hi); border-radius: 2px; }
+
+.msg-bubble {
+  max-width: 90%;
+  animation: msgIn 0.15s ease;
+}
+
+@keyframes msgIn {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+.msg-bubble.local { align-self: flex-end; }
+.msg-bubble.remote { align-self: flex-start; }
+
+.msg-meta {
+  font-size: 10px;
+  letter-spacing: 1px;
+  color: var(--text-lo);
+  margin-bottom: 4px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.msg-bubble.local .msg-meta { justify-content: flex-end; }
+
+.msg-body {
+  padding: 8px 12px;
+  border-radius: var(--radius);
+  font-size: 13px;
+  line-height: 1.5;
+  word-break: break-word;
+}
+
+.msg-bubble.local .msg-body {
+  background: rgba(0,207,255,0.1);
+  border: 1px solid rgba(0,207,255,0.2);
+  color: var(--text-hi);
+}
+
+.msg-bubble.remote .msg-body {
+  background: var(--panel2);
+  border: 1px solid var(--border);
+  color: var(--text-hi);
+}
+
+.msg-lock {
+  font-size: 9px;
+  opacity: 0.5;
+}
+
+#chat-input-area {
+  display: flex;
+  gap: 8px;
+  padding: 12px;
+  border-top: 1px solid var(--border);
+}
+
+#msg-input {
+  flex: 1;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--text-hi);
+  font-family: var(--font-mono);
+  font-size: 13px;
+  padding: 8px 12px;
+  outline: none;
+  transition: var(--transition);
+}
+#msg-input:focus {
+  border-color: var(--border-hi);
+}
+#msg-input:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
+}
+#msg-input::placeholder { color: var(--text-lo); }
+
+#send-btn {
+  font-family: var(--font-ui);
+  font-size: 9px;
+  letter-spacing: 2px;
+  padding: 8px 14px;
+  border: 1px solid var(--blue-dim);
+  border-radius: var(--radius);
+  color: var(--blue);
+  background: transparent;
+  cursor: pointer;
+  text-transform: uppercase;
+  transition: var(--transition);
+}
+#send-btn:hover {
+  background: rgba(0,207,255,0.08);
+  border-color: var(--blue);
+}
+#send-btn:disabled { opacity: 0.3; cursor: not-allowed; }
+
+/* System messages in chat */
+.sys-msg {
+  text-align: center;
+  font-size: 10px;
+  letter-spacing: 2px;
+  color: var(--text-lo);
+  padding: 4px 0;
+  text-transform: uppercase;
+}
+.sys-msg.ok { color: var(--neon-dim); }
+.sys-msg.warn { color: var(--warn); opacity: 0.7; }
+
+/* ── Controls Bar ── */
+#controls-bar {
+  grid-area: controls;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 0 20px;
+  border-top: 1px solid var(--border);
+  background: var(--panel);
+}
+
+.ctrl-btn {
+  width: 40px; height: 40px;
+  border-radius: 50%;
+  border: 1px solid var(--border-hi);
+  background: var(--panel2);
+  color: var(--text-hi);
+  font-size: 16px;
+  cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+  transition: var(--transition);
+  flex-shrink: 0;
+}
+.ctrl-btn:hover { border-color: var(--text); }
+.ctrl-btn.active {
+  border-color: var(--neon);
+  color: var(--neon);
+  box-shadow: 0 0 10px rgba(0,255,159,0.2);
+}
+.ctrl-btn.muted {
+  border-color: var(--danger);
+  color: var(--danger);
+  background: rgba(255,45,85,0.08);
+}
+
+.ctrl-end {
+  width: 48px; height: 40px;
+  border-radius: 20px;
+  border: 1px solid var(--danger);
+  background: rgba(255,45,85,0.12);
+  color: var(--danger);
+  font-size: 18px;
+  cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+  transition: var(--transition);
+}
+.ctrl-end:hover {
+  background: rgba(255,45,85,0.25);
+  box-shadow: 0 0 12px rgba(255,45,85,0.3);
+}
+
+.crypto-info {
+  margin-left: auto;
+  font-size: 10px;
+  letter-spacing: 1.5px;
+  color: var(--text-lo);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  text-transform: uppercase;
+}
+.crypto-info.ready { color: var(--neon-dim); }
+
+/* ══════════════════════════════════════════════════════════
+   TOAST / LOG
+══════════════════════════════════════════════════════════ */
+#toast-area {
+  position: fixed;
+  bottom: 70px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 1000;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  pointer-events: none;
+}
+
+.toast {
+  font-size: 11px;
+  letter-spacing: 1.5px;
+  padding: 8px 18px;
+  border-radius: var(--radius);
+  border: 1px solid var(--border-hi);
+  background: var(--panel);
+  color: var(--text);
+  animation: toastIn 0.2s ease, toastOut 0.3s ease 2.8s forwards;
+  text-transform: uppercase;
+  white-space: nowrap;
+  backdrop-filter: blur(4px);
+}
+.toast.ok    { border-color: var(--neon-dim); color: var(--neon); }
+.toast.error { border-color: var(--danger); color: var(--danger); }
+.toast.warn  { border-color: var(--warn); color: var(--warn); }
+
+@keyframes toastIn  { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
+@keyframes toastOut { from { opacity: 1; } to { opacity: 0; transform: translateY(-6px); } }
+
+/* ══════════════════════════════════════════════════════════
+   RESPONSIVE
+══════════════════════════════════════════════════════════ */
+@media (max-width: 700px) {
+  #screen-session {
+    grid-template-columns: 1fr;
+    grid-template-rows: 48px 200px 1fr 52px;
+    grid-template-areas:
+      "header"
+      "video"
+      "chat"
+      "controls";
+  }
+  #chat-panel { border-left: none; border-top: 1px solid var(--border); }
+  .logo-title { font-size: 32px; letter-spacing: 6px; }
+  .room-id-display { font-size: 26px; letter-spacing: 8px; }
+}
+</style>
+</head>
+<body>
+<div id="app">
+
+  <!-- ── LANDING ────────────────────────────────────── -->
+  <div id="screen-landing">
+    <div class="logo-block">
+      <div class="logo-title glow">SECVID</div>
+      <div class="logo-sub">End-to-End Encrypted · Chat &amp; Video</div>
+      <div class="cipher-badges">
+        <span class="badge">X25519 ECDH</span>
+        <span class="badge">XChaCha20-Poly1305</span>
+        <span class="badge">AES-256-GCM</span>
+        <span class="badge">WebRTC P2P</span>
+      </div>
+    </div>
+
+    <div class="landing-card">
+      <div class="card-section">
+        <div class="card-label">// New Session</div>
+        <button class="btn btn-primary" id="create-btn" onclick="UI.createRoom()" style="width:100%;justify-content:center;">
+          &#x2295; Create Encrypted Room
+        </button>
+      </div>
+      <div class="card-section">
+        <div class="card-label">// Join Existing Room</div>
+        <div class="input-row">
+          <input class="inp" id="room-input" type="text"
+            placeholder="ROOM ID"
+            maxlength="10"
+            autocomplete="off"
+            spellcheck="false"
+            onkeydown="if(event.key==='Enter')UI.joinRoom()">
+          <button class="btn btn-secondary" onclick="UI.joinRoom()">Join</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── WAITING ────────────────────────────────────── -->
+  <div id="screen-waiting" class="hidden">
+    <div class="wait-label">// Secure Room Created</div>
+    <div class="room-id-display" id="waiting-room-id">——————</div>
+    <div style="display:flex;align-items:center;gap:10px">
+      <div class="pulse-indicator"></div>
+      <button class="btn btn-secondary" id="copy-btn" onclick="UI.copyRoomId()">Copy ID</button>
+    </div>
+    <div class="wait-hint dim">
+      Share the Room ID with your peer.<br>
+      Connection is established peer-to-peer.<br>
+      Server never sees your messages or keys.
+    </div>
+    <button class="btn" style="border-color:var(--text-lo);color:var(--text)" onclick="UI.goHome()">Cancel</button>
+  </div>
+
+  <!-- ── SESSION ────────────────────────────────────── -->
+  <div id="screen-session" class="hidden">
+
+    <!-- Header -->
+    <div id="session-header">
+      <span class="header-logo">SECVID</span>
+      <span class="header-sep">|</span>
+      <span class="header-room" id="header-room-id">——</span>
+      <div class="header-status">
+        <div class="status-pill">
+          <div class="dot warn" id="dot-peer"></div>
+          <span id="lbl-peer">Waiting</span>
+        </div>
+        <div class="status-pill">
+          <div class="dot" id="dot-keys"></div>
+          <span id="lbl-keys">Keys</span>
+        </div>
+        <div class="status-pill">
+          <div class="dot" id="dot-video"></div>
+          <span id="lbl-video">Video</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Video -->
+    <div id="video-panel">
+      <video id="remote-video" autoplay playsinline></video>
+      <video id="local-video" autoplay playsinline muted></video>
+      <div class="video-overlay" id="video-overlay">
+        <div class="overlay-icon">◈</div>
+        <div class="overlay-text">Awaiting encrypted stream…</div>
+      </div>
+      <div class="e2e-badge" id="e2e-badge">
+        <span id="e2e-dot" style="width:6px;height:6px;border-radius:50%;background:var(--neon-dim);display:inline-block;"></span>
+        AES-256-GCM
+      </div>
+    </div>
+
+    <!-- Chat -->
+    <div id="chat-panel">
+      <div id="messages-area"></div>
+      <div id="chat-input-area">
+        <input id="msg-input" type="text"
+          placeholder="Encrypted message…"
+          autocomplete="off"
+          spellcheck="false"
+          disabled
+          onkeydown="if(event.key==='Enter')Chat.send()">
+        <button id="send-btn" disabled onclick="Chat.send()">Send</button>
+      </div>
+    </div>
+
+    <!-- Controls -->
+    <div id="controls-bar">
+      <button class="ctrl-btn active" id="btn-mic" title="Toggle microphone" onclick="Media.toggleMic()">🎤</button>
+      <button class="ctrl-btn active" id="btn-cam" title="Toggle camera" onclick="Media.toggleCam()">📷</button>
+      <button class="ctrl-end" title="End session" onclick="UI.hangup()">✕</button>
+      <div class="crypto-info" id="crypto-info">
+        <span>&#x1F512;</span> E2E ENCRYPTED
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<!-- Toast container -->
+<div id="toast-area"></div>
+
+<!-- ═══════════════════════════════════════════════════════
+     JAVASCRIPT
+═══════════════════════════════════════════════════════ -->
+<script>
+'use strict';
+
+/* ══════════════════════════════════════════════════════════
+   STATE
+══════════════════════════════════════════════════════════ */
+const S = {
+  socket:        null,
+  pc:            null,         // RTCPeerConnection
+  localStream:   null,
+  roomId:        null,
+  isInitiator:   false,
+
+  // Crypto
+  kxKeypair:     null,         // libsodium crypto_kx keypair
+  sessionTx:     null,         // Uint8Array — my chat transmit key
+  sessionRx:     null,         // Uint8Array — my chat receive key
+  videoEncKey:   null,         // CryptoKey AES-256-GCM — encrypt outgoing frames
+  videoDecKey:   null,         // CryptoKey AES-256-GCM — decrypt incoming frames
+  keysReady:     false,
+
+  // Insertable streams buffers
+  pendingSends:  [],            // [{readable, writable}]
+  pendingRecvs:  [],            // [{readable, writable}]
+
+  // Media flags
+  audioMuted:    false,
+  videoOff:      false,
+
+  // Feature detection
+  insertableStreams: false,
+};
+
+/* ══════════════════════════════════════════════════════════
+   CRYPTO
+══════════════════════════════════════════════════════════ */
+const Crypto = {
+
+  async init() {
+    await sodium.ready;
+    S.kxKeypair = sodium.crypto_kx_keypair();
+    // Detect Insertable Streams support
+    S.insertableStreams = (typeof RTCRtpSender !== 'undefined' &&
+      typeof RTCRtpSender.prototype.createEncodedStreams === 'function');
+    toast(`Crypto ready · X25519 keypair generated`, 'ok');
+  },
+
+  async deriveKeys(peerPubkeyB64) {
+    const peerPk = sodium.from_base64(peerPubkeyB64);
+    let keys;
+    if (S.isInitiator) {
+      // Second peer = "client" in libsodium kx semantics
+      keys = sodium.crypto_kx_client_session_keys(
+        S.kxKeypair.publicKey, S.kxKeypair.privateKey, peerPk
+      );
+    } else {
+      // First peer = "server"
+      keys = sodium.crypto_kx_server_session_keys(
+        S.kxKeypair.publicKey, S.kxKeypair.privateKey, peerPk
+      );
+    }
+    S.sessionTx = keys.sharedTx;  // my transmit key
+    S.sessionRx = keys.sharedRx;  // my receive key
+
+    // video keys: encKey = my tx (matches peer's rx), decKey = my rx (matches peer's tx)
+    S.videoEncKey = await crypto.subtle.importKey(
+      'raw', S.sessionTx, { name: 'AES-GCM' }, false, ['encrypt']
+    );
+    S.videoDecKey = await crypto.subtle.importKey(
+      'raw', S.sessionRx, { name: 'AES-GCM' }, false, ['decrypt']
+    );
+
+    S.keysReady = true;
+    Status.setKeys(true);
+    Chat.enable();
+    VideoE2E.applyPending();
+    toast('Keys derived · XChaCha20-Poly1305 + AES-256-GCM active', 'ok');
+    Chat.sysMsg('End-to-end keys established', 'ok');
+  },
+
+  encryptMsg(text) {
+    const msg   = sodium.from_string(text);
+    const nonce = sodium.randombytes_buf(sodium.crypto_aead_xchacha20poly1305_ietf_NPUBBYTES);
+    const ct    = sodium.crypto_aead_xchacha20poly1305_ietf_encrypt(msg, null, null, nonce, S.sessionTx);
+    return {
+      ct:    sodium.to_base64(ct),
+      nonce: sodium.to_base64(nonce),
+    };
+  },
+
+  decryptMsg(ctB64, nonceB64) {
+    try {
+      const ct    = sodium.from_base64(ctB64);
+      const nonce = sodium.from_base64(nonceB64);
+      const pt    = sodium.crypto_aead_xchacha20poly1305_ietf_decrypt(null, ct, null, nonce, S.sessionRx);
+      return sodium.to_string(pt);
+    } catch {
+      return '[⚠ AUTHENTICATION FAILED]';
+    }
+  },
+};
+
+/* ══════════════════════════════════════════════════════════
+   VIDEO FRAME ENCRYPTION (Insertable Streams / AES-256-GCM)
+══════════════════════════════════════════════════════════ */
+const VideoE2E = {
+
+  wrapSender(sender) {
+    if (!sender.createEncodedStreams) return;
+    const { readable, writable } = sender.createEncodedStreams();
+    if (S.keysReady) {
+      this._pipeSend(readable, writable);
+    } else {
+      S.pendingSends.push({ readable, writable });
+    }
+  },
+
+  wrapReceiver(receiver) {
+    if (!receiver.createEncodedStreams) return;
+    const { readable, writable } = receiver.createEncodedStreams();
+    if (S.keysReady) {
+      this._pipeRecv(readable, writable);
+    } else {
+      S.pendingRecvs.push({ readable, writable });
+    }
+  },
+
+  applyPending() {
+    while (S.pendingSends.length > 0) {
+      const { readable, writable } = S.pendingSends.pop();
+      this._pipeSend(readable, writable);
+    }
+    while (S.pendingRecvs.length > 0) {
+      const { readable, writable } = S.pendingRecvs.pop();
+      this._pipeRecv(readable, writable);
+    }
+    // Mark E2E video badge active
+    const badge = document.getElementById('e2e-badge');
+    const dot   = document.getElementById('e2e-dot');
+    if (badge) badge.classList.add('active');
+    if (dot)   dot.style.background = 'var(--neon)';
+    const ci = document.getElementById('crypto-info');
+    if (ci) ci.classList.add('ready');
+  },
+
+  _pipeSend(readable, writable) {
+    const key = S.videoEncKey;
+    const transform = new TransformStream({
+      async transform(frame, controller) {
+        try {
+          const iv  = crypto.getRandomValues(new Uint8Array(12));
+          const enc = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, frame.data);
+          const out = new Uint8Array(12 + enc.byteLength);
+          out.set(iv, 0);
+          out.set(new Uint8Array(enc), 12);
+          frame.data = out.buffer;
+          controller.enqueue(frame);
+        } catch { /* drop malformed */ }
+      }
+    });
+    readable.pipeThrough(transform).pipeTo(writable);
+  },
+
+  _pipeRecv(readable, writable) {
+    const key = S.videoDecKey;
+    const transform = new TransformStream({
+      async transform(frame, controller) {
+        try {
+          const data = new Uint8Array(frame.data);
+          if (data.length < 13) return;
+          const iv  = data.slice(0, 12);
+          const ct  = data.slice(12);
+          const dec = await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, key, ct);
+          frame.data = dec;
+          controller.enqueue(frame);
+        } catch { /* drop corrupted/replayed frames */ }
+      }
+    });
+    readable.pipeThrough(transform).pipeTo(writable);
+  },
+};
+
+/* ══════════════════════════════════════════════════════════
+   WEBRTC
+══════════════════════════════════════════════════════════ */
+const PC_CONFIG = {
+  iceServers: [
+    { urls: 'stun:stun.l.google.com:19302' },
+    { urls: 'stun:stun1.l.google.com:19302' },
+  ],
+  ...(S.insertableStreams ? { encodedInsertableStreams: true } : {}),
+};
+
+const WebRTC = {
+
+  createPC() {
+    // Re-evaluate insertableStreams flag now that detection ran in Crypto.init
+    const cfg = {
+      iceServers: PC_CONFIG.iceServers,
+      ...(S.insertableStreams ? { encodedInsertableStreams: true } : {}),
+    };
+    S.pc = new RTCPeerConnection(cfg);
+
+    // Add local tracks
+    S.localStream.getTracks().forEach(track => {
+      const sender = S.pc.addTrack(track, S.localStream);
+      if (S.insertableStreams) VideoE2E.wrapSender(sender);
+    });
+
+    // Receive remote tracks
+    S.pc.ontrack = (e) => {
+      const rv = document.getElementById('remote-video');
+      if (rv.srcObject !== e.streams[0]) {
+        rv.srcObject = e.streams[0];
+        document.getElementById('video-overlay').classList.add('hidden');
+        Status.setVideo(true);
+      }
+      if (S.insertableStreams) VideoE2E.wrapReceiver(e.receiver);
+    };
+
+    // ICE candidates
+    S.pc.onicecandidate = (e) => {
+      if (e.candidate) {
+        S.socket.emit('ice', { candidate: e.candidate });
+      }
+    };
+
+    // Connection state
+    S.pc.onconnectionstatechange = () => {
+      const state = S.pc.connectionState;
+      Status.setPeer(state);
+      if (state === 'connected') {
+        Chat.sysMsg('Peer-to-peer connection established', 'ok');
+        toast('P2P connected', 'ok');
+      } else if (state === 'disconnected' || state === 'failed') {
+        Status.setVideo(false);
+        Chat.sysMsg('Peer disconnected', 'warn');
+      }
+    };
+  },
+
+  async makeOffer() {
+    this.createPC();
+    const offer = await S.pc.createOffer();
+    await S.pc.setLocalDescription(offer);
+    S.socket.emit('offer', { sdp: offer });
+  },
+
+  async handleOffer(sdp) {
+    this.createPC();
+    await S.pc.setRemoteDescription(new RTCSessionDescription(sdp));
+    const answer = await S.pc.createAnswer();
+    await S.pc.setLocalDescription(answer);
+    S.socket.emit('answer', { sdp: answer });
+  },
+
+  async handleAnswer(sdp) {
+    await S.pc.setRemoteDescription(new RTCSessionDescription(sdp));
+  },
+
+  async handleIce(candidate) {
+    try { await S.pc.addIceCandidate(new RTCIceCandidate(candidate)); } catch {}
+  },
+};
+
+/* ══════════════════════════════════════════════════════════
+   MEDIA
+══════════════════════════════════════════════════════════ */
+const Media = {
+
+  async start() {
+    try {
+      S.localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+      document.getElementById('local-video').srcObject = S.localStream;
+      return true;
+    } catch (e) {
+      // Try audio-only fallback
+      try {
+        S.localStream = await navigator.mediaDevices.getUserMedia({ video: false, audio: true });
+        document.getElementById('local-video').srcObject = S.localStream;
+        toast('Camera unavailable — audio only', 'warn');
+        return true;
+      } catch {
+        toast('Media access denied', 'error');
+        return false;
+      }
+    }
+  },
+
+  toggleMic() {
+    if (!S.localStream) return;
+    const track = S.localStream.getAudioTracks()[0];
+    if (!track) return;
+    S.audioMuted = !S.audioMuted;
+    track.enabled = !S.audioMuted;
+    const btn = document.getElementById('btn-mic');
+    btn.classList.toggle('active', !S.audioMuted);
+    btn.classList.toggle('muted', S.audioMuted);
+    btn.textContent = S.audioMuted ? '🔇' : '🎤';
+  },
+
+  toggleCam() {
+    if (!S.localStream) return;
+    const track = S.localStream.getVideoTracks()[0];
+    if (!track) return;
+    S.videoOff = !S.videoOff;
+    track.enabled = !S.videoOff;
+    const btn = document.getElementById('btn-cam');
+    btn.classList.toggle('active', !S.videoOff);
+    btn.classList.toggle('muted', S.videoOff);
+    btn.textContent = S.videoOff ? '🚫' : '📷';
+  },
+
+  stop() {
+    if (S.localStream) {
+      S.localStream.getTracks().forEach(t => t.stop());
+      S.localStream = null;
+    }
+  },
+};
+
+/* ══════════════════════════════════════════════════════════
+   CHAT
+══════════════════════════════════════════════════════════ */
+const Chat = {
+
+  enable() {
+    document.getElementById('msg-input').disabled = false;
+    document.getElementById('send-btn').disabled = false;
+    document.getElementById('msg-input').focus();
+  },
+
+  send() {
+    const input = document.getElementById('msg-input');
+    const text  = input.value.trim();
+    if (!text || !S.keysReady) return;
+
+    const { ct, nonce } = Crypto.encryptMsg(text);
+    const ts = Date.now();
+    S.socket.emit('msg', { ct, nonce, ts });
+    this.appendMsg(text, 'local', ts);
+    input.value = '';
+  },
+
+  appendMsg(text, who, ts) {
+    const area = document.getElementById('messages-area');
+    const bubble = document.createElement('div');
+    bubble.className = `msg-bubble ${who}`;
+
+    const time = new Date(ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    const label = who === 'local' ? 'ME' : 'PEER';
+
+    bubble.innerHTML = `
+      <div class="msg-meta">
+        <span>${label}</span>
+        <span>${time}</span>
+        <span class="msg-lock">🔒</span>
+      </div>
+      <div class="msg-body">${this._esc(text)}</div>
+    `;
+
+    area.appendChild(bubble);
+    area.scrollTop = area.scrollHeight;
+  },
+
+  sysMsg(text, type = '') {
+    const area = document.getElementById('messages-area');
+    const el   = document.createElement('div');
+    el.className = `sys-msg ${type}`;
+    el.textContent = `⬡ ${text}`;
+    area.appendChild(el);
+    area.scrollTop = area.scrollHeight;
+  },
+
+  _esc(s) {
+    return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  },
+};
+
+/* ══════════════════════════════════════════════════════════
+   STATUS INDICATORS
+══════════════════════════════════════════════════════════ */
+const Status = {
+
+  setPeer(state) {
+    const dot = document.getElementById('dot-peer');
+    const lbl = document.getElementById('lbl-peer');
+    dot.className = 'dot';
+    if (state === 'connected') {
+      dot.classList.add('active');
+      lbl.textContent = 'Connected';
+    } else if (state === 'connecting') {
+      dot.classList.add('warn');
+      lbl.textContent = 'Connecting';
+    } else if (state === 'disconnected' || state === 'failed') {
+      dot.classList.add('error');
+      lbl.textContent = 'Disconnected';
+    } else {
+      dot.classList.add('warn');
+      lbl.textContent = 'Waiting';
+    }
+  },
+
+  setKeys(ok) {
+    const dot = document.getElementById('dot-keys');
+    const lbl = document.getElementById('lbl-keys');
+    dot.className = 'dot' + (ok ? ' active' : ' warn');
+    lbl.textContent = ok ? 'Keys OK' : 'Keying…';
+  },
+
+  setVideo(ok) {
+    const dot = document.getElementById('dot-video');
+    const lbl = document.getElementById('lbl-video');
+    dot.className = 'dot' + (ok ? ' active' : '');
+    lbl.textContent = ok ? 'Video E2E' : 'No Video';
+  },
+};
+
+/* ══════════════════════════════════════════════════════════
+   SIGNALING (Socket.IO)
+══════════════════════════════════════════════════════════ */
+const Signaling = {
+
+  connect() {
+    S.socket = io();
+
+    S.socket.on('room_created', ({ room_id }) => {
+      S.roomId = room_id;
+      UI.showWaiting(room_id);
+    });
+
+    S.socket.on('joined', async ({ room_id, initiator }) => {
+      S.roomId = room_id;
+      S.isInitiator = initiator;
+      if (initiator) {
+        // Second peer — start session immediately
+        await this._startSession();
+      }
+      // First peer waits for 'peer_arrived'
+    });
+
+    S.socket.on('peer_arrived', async () => {
+      // First peer: counterpart joined
+      await this._startSession();
+    });
+
+    // Key exchange — relay public keys
+    S.socket.on('pubkey', async ({ pubkey }) => {
+      await Crypto.deriveKeys(pubkey);
+      // After key derivation, initiator kicks off WebRTC
+      if (S.isInitiator) {
+        await WebRTC.makeOffer();
+      }
+    });
+
+    S.socket.on('offer', async ({ sdp }) => {
+      await WebRTC.handleOffer(sdp);
+    });
+
+    S.socket.on('answer', async ({ sdp }) => {
+      await WebRTC.handleAnswer(sdp);
+    });
+
+    S.socket.on('ice', async ({ candidate }) => {
+      await WebRTC.handleIce(candidate);
+    });
+
+    S.socket.on('msg', ({ ct, nonce, ts }) => {
+      if (!S.keysReady) return;
+      const text = Crypto.decryptMsg(ct, nonce);
+      Chat.appendMsg(text, 'remote', ts || Date.now());
+    });
+
+    S.socket.on('peer_left', () => {
+      Status.setPeer('disconnected');
+      toast('Peer disconnected', 'warn');
+      Chat.sysMsg('Peer left the session', 'warn');
+      Status.setVideo(false);
+    });
+
+    S.socket.on('error', ({ msg }) => {
+      toast(msg, 'error');
+    });
+
+    S.socket.on('disconnect', () => {
+      toast('Disconnected from server', 'error');
+    });
+  },
+
+  async _startSession() {
+    UI.showSession();
+    document.getElementById('header-room-id').textContent = S.roomId;
+    await Media.start();
+    Status.setPeer('connecting');
+    Chat.sysMsg('Secure channel establishing…');
+    // Send public key for X25519 handshake
+    S.socket.emit('pubkey', {
+      pubkey: sodium.to_base64(S.kxKeypair.publicKey),
+    });
+  },
+};
+
+/* ══════════════════════════════════════════════════════════
+   UI
+══════════════════════════════════════════════════════════ */
+const UI = {
+
+  createRoom() {
+    S.socket.emit('create_room');
+  },
+
+  joinRoom() {
+    const rid = document.getElementById('room-input').value.trim();
+    if (!rid) return;
+    S.socket.emit('join', { room_id: rid });
+  },
+
+  copyRoomId() {
+    if (!S.roomId) return;
+    navigator.clipboard.writeText(S.roomId).then(() => toast('Room ID copied', 'ok'));
+  },
+
+  showWaiting(room_id) {
+    show('screen-waiting');
+    document.getElementById('waiting-room-id').textContent = room_id;
+  },
+
+  showSession() {
+    show('screen-session');
+  },
+
+  goHome() {
+    show('screen-landing');
+    S.roomId = null;
+  },
+
+  hangup() {
+    Media.stop();
+    if (S.pc) { S.pc.close(); S.pc = null; }
+    // Reset state
+    S.sessionTx  = null;
+    S.sessionRx  = null;
+    S.videoEncKey = null;
+    S.videoDecKey = null;
+    S.keysReady   = false;
+    S.pendingSends = [];
+    S.pendingRecvs = [];
+    S.roomId = null;
+    show('screen-landing');
+    toast('Session ended', 'warn');
+  },
+};
+
+/* ══════════════════════════════════════════════════════════
+   HELPERS
+══════════════════════════════════════════════════════════ */
+function show(id) {
+  ['screen-landing', 'screen-waiting', 'screen-session'].forEach(s => {
+    document.getElementById(s).classList.toggle('hidden', s !== id);
+  });
+}
+
+function toast(msg, type = '') {
+  const area = document.getElementById('toast-area');
+  const el   = document.createElement('div');
+  el.className = `toast ${type}`;
+  el.textContent = msg.toUpperCase();
+  area.appendChild(el);
+  setTimeout(() => el.remove(), 3300);
+}
+
+/* ══════════════════════════════════════════════════════════
+   BOOTSTRAP
+══════════════════════════════════════════════════════════ */
+(async () => {
+  // Init libsodium + generate X25519 keypair
+  await Crypto.init();
+  // Connect signaling socket
+  Signaling.connect();
+})();
+</script>
+</body>
+<footer>
+  <div class="source-link">
+    <a href="https://git.securityops.co/cristiancmoises/keywave" target="_blank">
+      <i class="fa-brands fa-github"></i> Source Code
+    </a>
+  </div>
+</footer>
+</html>
