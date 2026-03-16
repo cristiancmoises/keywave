@@ -1,0 +1,28 @@
+services:
+  keywave:
+    build: .
+    container_name: keywave
+    restart: unless-stopped
+    ports:
+      - "0.0.0.0:5128:5000"
+    environment:
+      - PYTHONUNBUFFERED=1
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:5000/')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+# ── Optional: put behind your existing Nginx Proxy Manager ───────────────────
+# Point NPM at http://keywave:5000 with WebSocket support enabled.
+# In NPM advanced config add:
+#   proxy_http_version 1.1;
+#   proxy_set_header Upgrade $http_upgrade;
+#   proxy_set_header Connection "upgrade";
+# ─────────────────────────────────────────────────────────────────────────────
