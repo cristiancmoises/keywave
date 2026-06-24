@@ -845,7 +845,12 @@ body::before {
   margin-bottom: 14px;
 }
 .modal-desc { font-size: 12px; color: var(--text); line-height: 1.6; margin-bottom: 20px; }
-.sas-emoji { font-size: 34px; letter-spacing: 8px; text-align: center; margin-bottom: 14px; }
+.sas-emoji { display: flex; flex-wrap: wrap; gap: 10px; justify-content: center; margin-bottom: 16px; }
+.sas-chip { display: flex; flex-direction: column; align-items: center; gap: 4px; min-width: 58px; padding: 8px 6px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg); }
+.sas-chip .e { font-size: 28px; line-height: 1; }
+.sas-chip .n { font-size: 9px; letter-spacing: 1px; color: var(--text); text-transform: uppercase; }
+@keyframes attn { 0%,100% { box-shadow: 0 0 0 rgba(0,207,255,0); } 50% { box-shadow: 0 0 14px rgba(0,207,255,0.6); } }
+.btn.attn { animation: attn 1.2s ease-in-out 4; }
 .sas-hex {
   font-family: var(--font-mono);
   font-size: 16px; letter-spacing: 3px; color: var(--blue);
@@ -966,7 +971,7 @@ body::before {
       </div>
       <div class="e2e-badge" id="e2e-badge">
         <span id="e2e-dot" style="width:6px;height:6px;border-radius:50%;background:var(--neon-dim);display:inline-block;"></span>
-        AES-256-GCM
+        <span id="e2e-label">AES-256-GCM</span>
       </div>
     </div>
 
@@ -1042,12 +1047,16 @@ const S = {
   chatDecKey:    null,   // CryptoKey AES-256-GCM — decrypt incoming chat
   videoEncKey:   null,
   videoDecKey:   null,
+  audioEncKey:   null,   // separate key space for audio frames
+  audioDecKey:   null,
   keysReady:     false,
   pendingSends:  [],
   pendingRecvs:  [],
   audioMuted:    false,
   videoOff:      false,
   insertableStreams: false,
+  peerFenc:      false,  // peer advertised Insertable Streams support
+  frameEncActive: false, // per-frame E2E enabled (both peers support it)
   sas:           null,   // Uint8Array — safety number (MITM check)
   verified:      false,
   txSeq:         0,      // outgoing chat sequence (replay/reorder defense)
@@ -1120,6 +1129,14 @@ const Crypto = {
       { name: 'HKDF', hash: 'SHA-256', salt: new Uint8Array(32), info: enc.encode('video:' + rxInfo) },
       hkdfKey, { name: 'AES-GCM', length: 256 }, false, ['decrypt']
     );
+    S.audioEncKey = await crypto.subtle.deriveKey(
+      { name: 'HKDF', hash: 'SHA-256', salt: new Uint8Array(32), info: enc.encode('audio:' + txInfo) },
+      hkdfKey, { name: 'AES-GCM', length: 256 }, false, ['encrypt']
+    );
+    S.audioDecKey = await crypto.subtle.deriveKey(
+      { name: 'HKDF', hash: 'SHA-256', salt: new Uint8Array(32), info: enc.encode('audio:' + rxInfo) },
+      hkdfKey, { name: 'AES-GCM', length: 256 }, false, ['decrypt']
+    );
 
     // Safety number (SAS): HKDF over the shared secret bound to BOTH public
     // keys in sorted order, independent of direction. A relay that swaps keys
@@ -1141,7 +1158,8 @@ const Crypto = {
     Chat.enable();
     VideoE2E.applyPending();
     Verify.ready();
-    toast('Keys derived · AES-256-GCM active (chat + video)', 'ok');
+    Verify.prompt();
+    toast('Keys derived · AES-256-GCM (chat + audio + video)', 'ok');
     Chat.sysMsg('End-to-end keys established — verify the safety number', 'ok');
   },
 
@@ -1179,31 +1197,36 @@ const Crypto = {
 const VideoE2E = {
   wrapSender(sender) {
     if (!sender.createEncodedStreams) return;
+    const kind = sender.track ? sender.track.kind : 'video';
     const { readable, writable } = sender.createEncodedStreams();
-    if (S.keysReady) this._pipeSend(readable, writable);
-    else S.pendingSends.push({ readable, writable });
+    if (S.keysReady) this._pipeSend(readable, writable, kind);
+    else S.pendingSends.push({ readable, writable, kind });
   },
   wrapReceiver(receiver) {
     if (!receiver.createEncodedStreams) return;
+    const kind = receiver.track ? receiver.track.kind : 'video';
     const { readable, writable } = receiver.createEncodedStreams();
-    if (S.keysReady) this._pipeRecv(readable, writable);
-    else S.pendingRecvs.push({ readable, writable });
+    if (S.keysReady) this._pipeRecv(readable, writable, kind);
+    else S.pendingRecvs.push({ readable, writable, kind });
   },
   applyPending() {
-    while (S.pendingSends.length) { const { readable, writable } = S.pendingSends.pop(); this._pipeSend(readable, writable); }
-    while (S.pendingRecvs.length) { const { readable, writable } = S.pendingRecvs.pop(); this._pipeRecv(readable, writable); }
-    const badge = document.getElementById('e2e-badge');
-    const dot   = document.getElementById('e2e-dot');
-    if (badge) badge.classList.add('active');
-    if (dot)   dot.style.background = 'var(--neon)';
-    document.getElementById('crypto-info')?.classList.add('ready');
+    while (S.pendingSends.length) { const p = S.pendingSends.pop(); this._pipeSend(p.readable, p.writable, p.kind); }
+    while (S.pendingRecvs.length) { const p = S.pendingRecvs.pop(); this._pipeRecv(p.readable, p.writable, p.kind); }
+    setMediaBadge(S.frameEncActive);
+    if (S.frameEncActive) document.getElementById('crypto-info')?.classList.add('ready');
   },
-  _pipeSend(readable, writable) {
-    const key = S.videoEncKey;
+  // IV = 4-byte random per-stream prefix + 8-byte big-endian counter, so an IV
+  // is never reused within a stream (stronger than a random per-frame IV).
+  _pipeSend(readable, writable, kind) {
+    const key = kind === 'audio' ? S.audioEncKey : S.videoEncKey;
+    const iv  = new Uint8Array(12);
+    iv.set(crypto.getRandomValues(new Uint8Array(4)), 0);
+    const dv  = new DataView(iv.buffer);
+    let counter = 0n;
     readable.pipeThrough(new TransformStream({
       async transform(frame, ctrl) {
         try {
-          const iv  = crypto.getRandomValues(new Uint8Array(12));
+          dv.setBigUint64(4, counter++, false);
           const enc = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, frame.data);
           const out = new Uint8Array(12 + enc.byteLength);
           out.set(iv); out.set(new Uint8Array(enc), 12);
@@ -1213,8 +1236,8 @@ const VideoE2E = {
       }
     })).pipeTo(writable);
   },
-  _pipeRecv(readable, writable) {
-    const key = S.videoDecKey;
+  _pipeRecv(readable, writable, kind) {
+    const key = kind === 'audio' ? S.audioDecKey : S.videoDecKey;
     readable.pipeThrough(new TransformStream({
       async transform(frame, ctrl) {
         try {
@@ -1229,6 +1252,16 @@ const VideoE2E = {
   },
 };
 
+function setMediaBadge(active) {
+  const badge = document.getElementById('e2e-badge');
+  const dot   = document.getElementById('e2e-dot');
+  const label = document.getElementById('e2e-label');
+  if (!badge) return;
+  badge.classList.toggle('active', active);
+  if (dot)   dot.style.background = active ? 'var(--neon)' : 'var(--warn)';
+  if (label) label.textContent = active ? 'AES-256-GCM · FRAMES' : 'DTLS-SRTP';
+}
+
 /* ══════════════════════════════════════════════════════════
    WEBRTC
 ══════════════════════════════════════════════════════════ */
@@ -1239,12 +1272,15 @@ const WebRTC = {
         { urls: 'stun:stun.l.google.com:19302' },
         { urls: 'stun:stun1.l.google.com:19302' },
       ],
-      ...(S.insertableStreams ? { encodedInsertableStreams: true } : {}),
+      // Only enable encoded transforms when BOTH peers support them, so a
+      // mixed-browser call falls back cleanly to DTLS-SRTP instead of breaking.
+      ...(S.frameEncActive ? { encodedInsertableStreams: true } : {}),
     };
     S.pc = new RTCPeerConnection(cfg);
     S.localStream.getTracks().forEach(track => {
       const sender = S.pc.addTrack(track, S.localStream);
-      if (S.insertableStreams) VideoE2E.wrapSender(sender);
+      if (track.kind === 'video') this._tuneVideo(track, sender);
+      if (S.frameEncActive) VideoE2E.wrapSender(sender);
     });
     S.pc.ontrack = (e) => {
       const rv = document.getElementById('remote-video');
@@ -1253,7 +1289,7 @@ const WebRTC = {
         document.getElementById('video-overlay').classList.add('hidden');
         Status.setVideo(true);
       }
-      if (S.insertableStreams) VideoE2E.wrapReceiver(e.receiver);
+      if (S.frameEncActive) VideoE2E.wrapReceiver(e.receiver);
     };
     S.pc.onicecandidate = (e) => { if (e.candidate) S.socket.emit('ice', { candidate: e.candidate }); };
     S.pc.onconnectionstatechange = () => {
@@ -1262,6 +1298,17 @@ const WebRTC = {
       if (state === 'connected') { Chat.sysMsg('Peer-to-peer connection established', 'ok'); toast('P2P connected', 'ok'); }
       else if (state === 'disconnected' || state === 'failed') { Status.setVideo(false); Chat.sysMsg('Peer disconnected', 'warn'); }
     };
+  },
+  async _tuneVideo(track, sender) {
+    try { track.contentHint = 'motion'; } catch (e) {}
+    try {
+      const p = sender.getParameters();
+      if (!p.encodings || !p.encodings.length) p.encodings = [{}];
+      p.encodings[0].maxBitrate   = 2500000;   // ~2.5 Mbps for crisp 720p
+      p.encodings[0].maxFramerate = 30;
+      p.degradationPreference     = 'balanced';
+      await sender.setParameters(p);
+    } catch (e) { /* some browsers reject setParameters before negotiation */ }
   },
   async makeOffer() {
     this.createPC();
@@ -1285,13 +1332,26 @@ const WebRTC = {
 ══════════════════════════════════════════════════════════ */
 const Media = {
   async start() {
+    const hd = {
+      video: {
+        width:     { ideal: 1280 },
+        height:    { ideal: 720 },
+        frameRate: { ideal: 30 },
+        facingMode: 'user',
+      },
+      audio: {
+        echoCancellation: true,
+        noiseSuppression: true,
+        autoGainControl:  true,
+      },
+    };
     try {
-      S.localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+      S.localStream = await navigator.mediaDevices.getUserMedia(hd);
       document.getElementById('local-video').srcObject = S.localStream;
       return true;
     } catch {
       try {
-        S.localStream = await navigator.mediaDevices.getUserMedia({ video: false, audio: true });
+        S.localStream = await navigator.mediaDevices.getUserMedia({ video: false, audio: hd.audio });
         document.getElementById('local-video').srcObject = S.localStream;
         toast('Camera unavailable — audio only', 'warn');
         return true;
@@ -1411,13 +1471,30 @@ const Status = {
 /* ══════════════════════════════════════════════════════════
    SAFETY-NUMBER VERIFICATION (MITM defense)
 ══════════════════════════════════════════════════════════ */
-const SAS_EMOJI = ['🐶','🐱','🦊','🐻','🐼','🐨','🦁','🐯','🐮','🐷','🐸','🐵','🐔','🐧','🦉','🦄','🐝','🦋','🐢','🐙','🐠','🐬','🐳','🌵','🌲','🍀','🍎','🍊','🍋','🍇','🍓','🍒','🍑','🥝','🌽','🥕','🍄','🌰','🍔','🍕','🌮','🍿','🍩','🍪','🎂','🍫','☕','🍵','⚽','🏀','🎲','🎸','🎺','🎨','🚀','🛸','⭐','🌙','☀️','🔥','💧','❄️','🔑','🔒'];
+// 64 named emoji (6 bits each). Names let peers read the codes aloud without
+// ambiguity over a call.
+const SAS_EMOJI = [
+  ['🐶','dog'],['🐱','cat'],['🦊','fox'],['🐻','bear'],['🐼','panda'],['🐨','koala'],['🦁','lion'],['🐯','tiger'],
+  ['🐮','cow'],['🐷','pig'],['🐸','frog'],['🐵','monkey'],['🐔','chick'],['🐧','penguin'],['🦉','owl'],['🦄','unicorn'],
+  ['🐝','bee'],['🦋','butterfly'],['🐢','turtle'],['🐙','octopus'],['🐠','fish'],['🐬','dolphin'],['🐳','whale'],['🌵','cactus'],
+  ['🌲','tree'],['🍀','clover'],['🍎','apple'],['🍊','orange'],['🍋','lemon'],['🍇','grapes'],['🍓','berry'],['🍒','cherry'],
+  ['🍑','peach'],['🥝','kiwi'],['🌽','corn'],['🥕','carrot'],['🍄','mushroom'],['🌰','chestnut'],['🍔','burger'],['🍕','pizza'],
+  ['🌮','taco'],['🍿','popcorn'],['🍩','donut'],['🍪','cookie'],['🎂','cake'],['🍫','chocolate'],['☕','coffee'],['🍵','tea'],
+  ['⚽','soccer'],['🏀','basketball'],['🎲','dice'],['🎸','guitar'],['🎺','trumpet'],['🎨','art'],['🚀','rocket'],['🛸','ufo'],
+  ['⭐','star'],['🌙','moon'],['☀️','sun'],['🔥','fire'],['💧','water'],['❄️','snow'],['🔑','key'],['🔒','lock'],
+];
 
 const Verify = {
   ready() {
     const b = document.getElementById('verify-btn');
     if (b) b.disabled = false;
     this.setState(false);
+  },
+  // One-time nudge to compare the safety number once keys are up.
+  prompt() {
+    const b = document.getElementById('verify-btn');
+    if (b) { b.classList.add('attn'); setTimeout(() => b.classList.remove('attn'), 5200); }
+    toast('Verify the safety number with your peer', 'warn');
   },
   setState(ok) {
     const dot = document.getElementById('dot-verify');
@@ -1426,20 +1503,28 @@ const Verify = {
     dot.className = 'dot' + (ok ? ' active' : ' warn');
     lbl.textContent = ok ? 'Verified' : 'Unverified';
   },
-  _render() {
+  _data() {
     if (!S.sas) return null;
-    const em = [], hex = [];
+    const items = [], hex = [];
     S.sas.forEach((byte, i) => {
-      if (i < 6) em.push(SAS_EMOJI[byte & 63]);
+      const [e, n] = SAS_EMOJI[byte & 63];
+      items.push({ e, n });
       hex.push(byte.toString(16).padStart(2, '0'));
     });
-    return { emoji: em.join('  '), hex: hex.join(' ').toUpperCase() };
+    return { items, hex: hex.join(' ').toUpperCase() };
   },
   open() {
-    const r = this._render();
-    if (!r) { toast('Keys not ready yet', 'warn'); return; }
-    document.getElementById('sas-emoji').textContent = r.emoji;
-    document.getElementById('sas-hex').textContent = r.hex;
+    const d = this._data();
+    if (!d) { toast('Keys not ready yet', 'warn'); return; }
+    const box = document.getElementById('sas-emoji');
+    box.textContent = '';
+    d.items.forEach(({ e, n }) => {
+      const chip = document.createElement('div'); chip.className = 'sas-chip';
+      const ce = document.createElement('div'); ce.className = 'e'; ce.textContent = e;
+      const cn = document.createElement('div'); cn.className = 'n'; cn.textContent = n;
+      chip.append(ce, cn); box.appendChild(chip);
+    });
+    document.getElementById('sas-hex').textContent = d.hex;
     document.getElementById('verify-modal').classList.remove('hidden');
   },
   close() { document.getElementById('verify-modal').classList.add('hidden'); },
@@ -1469,9 +1554,13 @@ const Signaling = {
 
     S.socket.on('peer_arrived', async () => { await this._startSession(); });
 
-    S.socket.on('pubkey', async ({ pubkey }) => {
+    S.socket.on('pubkey', async ({ pubkey, fenc }) => {
       try {
+        // Frame encryption is enabled only if BOTH peers advertise support.
+        S.peerFenc = !!fenc;
+        S.frameEncActive = !!(S.insertableStreams && S.peerFenc);
         await Crypto.deriveKeys(pubkey);
+        setMediaBadge(S.frameEncActive);
         if (S.isInitiator) await WebRTC.makeOffer();
       } catch(e) {
         console.error('[pubkey/deriveKeys]', e);
@@ -1512,9 +1601,10 @@ const Signaling = {
     Status.setPeer('connecting');
     Chat.sysMsg('Room: ' + S.roomId + ' · Share this ID with your peer');
     Chat.sysMsg('Secure channel establishing…');
-    // Send our ECDH public key (raw, base64-encoded)
+    // Send our ECDH public key (raw, base64-encoded) and advertise whether we
+    // can do per-frame encryption (Insertable Streams).
     const b64 = btoa(String.fromCharCode(...new Uint8Array(S.ecdhPubRaw)));
-    S.socket.emit('pubkey', { pubkey: b64 });
+    S.socket.emit('pubkey', { pubkey: b64, fenc: !!S.insertableStreams });
   },
 };
 
@@ -1544,14 +1634,17 @@ const UI = {
     if (S.pc) { S.pc.close(); S.pc = null; }
     S.chatEncKey = null; S.chatDecKey = null;
     S.videoEncKey = null; S.videoDecKey = null;
+    S.audioEncKey = null; S.audioDecKey = null;
     S.keysReady = false;
     S.pendingSends = []; S.pendingRecvs = [];
     S.sas = null; S.verified = false;
+    S.peerFenc = false; S.frameEncActive = false;
     S.txSeq = 0; S.rxSeq = 0;
     S.roomId = null;
     const vb = document.getElementById('verify-btn');
     if (vb) vb.disabled = true;
     Verify.setState(false);
+    setMediaBadge(false);
     show('screen-landing');
     toast('Session ended', 'warn');
   },
@@ -1728,10 +1821,11 @@ def on_join(data):
 
 @socketio.on("pubkey")
 def on_pubkey(data):
-    pk = (data or {}).get("pubkey")
+    data = data or {}
+    pk = data.get("pubkey")
     if not isinstance(pk, str) or _too_big(pk):
         return
-    relay("pubkey", {"pubkey": pk})
+    relay("pubkey", {"pubkey": pk, "fenc": bool(data.get("fenc"))})
 
 @socketio.on("offer")
 def on_offer(data):

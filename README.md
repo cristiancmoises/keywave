@@ -14,8 +14,9 @@ message or call content.
 - Works on desktop and mobile with a responsive, touch-friendly layout.
 - Invite by link: a share sheet plus one-tap WhatsApp, Telegram, email, and SMS,
   or copy the link / room ID. Opening an invite link auto-joins the room.
-- Safety-number verification to detect a man-in-the-middle.
-- Per-frame media encryption on Chromium browsers (Insertable Streams).
+- Safety-number verification (named emoji + hex) to detect a man-in-the-middle.
+- HD video (720p/30) with per-frame media encryption on Chromium browsers,
+  negotiated bilaterally and falling back to DTLS-SRTP with other browsers.
 - Single self-contained service: the client is embedded in `app.py` and all
   assets (socket.io, fonts) are self-hosted. No CDN, no third-party origins.
 

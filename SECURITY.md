@@ -36,12 +36,13 @@ shared secret.
 
 ### Key derivation
 
-HKDF-SHA-256 expands the shared secret into four independent AES-256-GCM keys:
-a send and receive key for chat, and a send and receive key for media. The
-`info` strings are `chat:A->B` / `chat:B->A` and `video:A->B` / `video:B->A`.
+HKDF-SHA-256 expands the shared secret into six independent AES-256-GCM keys:
+chat, video, and audio, each split into a send and a receive key. The `info`
+strings are `chat:{A->B|B->A}`, `video:{A->B|B->A}`, and `audio:{A->B|B->A}`.
 Send/receive direction is assigned by a lexicographic comparison of the two
-base64 public keys, so the two peers derive mirror-image key sets. Audio and
-video frames share the media key for their direction.
+base64 public keys, so the two peers derive mirror-image key sets. Each medium
+has its own key space, so a compromise of one stream's key never exposes
+another.
 
 The HKDF salt is a fixed zero block. This is intentional and safe: the input key
 material is a high-entropy ephemeral ECDH secret, and the `info` strings provide
@@ -58,16 +59,18 @@ gives replay and reorder detection.
 ### Audio and video
 
 Media is encrypted per encoded frame with AES-256-GCM using WebRTC Insertable
-Streams. A fresh random 96-bit IV is generated for each frame and prepended to
-the ciphertext.
+Streams. The IV is a 4-byte random per-stream prefix plus an 8-byte big-endian
+counter, so an IV is never reused within a stream. The IV is prepended to each
+frame.
 
-Insertable Streams is a Chromium feature. This build enables per-frame
-encryption whenever the local browser supports it and does not negotiate it
-bilaterally, so **both peers should use a Chromium-based browser** for a call.
-Where Insertable Streams is unavailable on both ends, media is still protected
-by WebRTC's transport encryption (DTLS-SRTP); because calls are peer-to-peer,
-that remains end-to-end at the transport layer. Per-frame encryption is defense
-in depth for paths that traverse a middlebox (for example a TURN relay).
+Insertable Streams is a Chromium feature. Frame encryption is **negotiated
+bilaterally**: each peer advertises support during the key exchange, and encoded
+transforms are enabled only when both peers support them. A mixed-browser call
+(for example Chromium with Firefox) therefore falls back cleanly to WebRTC's
+transport encryption (DTLS-SRTP) instead of breaking. Because calls are
+peer-to-peer, DTLS-SRTP is already end-to-end at the transport layer; per-frame
+encryption is defense in depth for paths that traverse a middlebox (for example
+a TURN relay). The in-call badge shows which mode is active.
 
 ### Session verification (safety number)
 
@@ -78,10 +81,11 @@ keys (sorted), independent of direction. Honest peers compute the same value; an
 attacker sitting in the middle necessarily produces a different value on each
 side.
 
-The safety number is shown as six emoji for a quick visual check, with the full
-64-bit value in hex in the verification dialog. Compare it with your peer over
-the live call. If the codes match, no one is intercepting the keys. Until you
-confirm, the session is shown as unverified.
+The safety number is shown as a row of named emoji (each with its name, so the
+codes can be read aloud unambiguously) plus the full 64-bit value in hex.
+Compare it with your peer over the live call. If the codes match, no one is
+intercepting the keys. Until you confirm, the session is shown as unverified,
+and the app prompts you once to compare it.
 
 ## Verifying a session
 
@@ -106,10 +110,9 @@ number.
 - **Verification is manual.** If users skip the safety-number comparison, a
   relay-level MITM is not automatically detected. The app surfaces an unverified
   state but does not block media, because the call itself is needed to compare.
-- **Per-frame media E2E is Chromium-only** and is not negotiated bilaterally in
-  this build, so a call should use the same browser family on both ends; mixed
-  Chromium/non-Chromium calls are not supported. Other cases fall back to
-  DTLS-SRTP.
+- **Per-frame media E2E requires Chromium** (Insertable Streams). It is
+  negotiated bilaterally, so a call with a non-Chromium peer falls back to
+  DTLS-SRTP rather than failing.
 - **No metadata protection** (IPs, timing, who-talks-to-whom).
 - **No in-session ratchet.** Keys are ephemeral per session and discarded on
   hangup, which gives forward secrecy across sessions; there is no key rotation
@@ -134,8 +137,8 @@ number.
 ## Supported browsers
 
 - Chrome / Edge / Chromium 86+: full chat and per-frame media encryption.
-- Firefox / Safari: full chat encryption; media uses DTLS-SRTP (use the same
-  browser family on both ends).
+- Firefox / Safari: full chat encryption; media uses DTLS-SRTP. Calls between a
+  Chromium and a non-Chromium peer work and fall back to DTLS-SRTP.
 - A secure context is required (`https://` or `http://localhost`); camera access
   and Web Crypto are unavailable on plain-HTTP origins.
 

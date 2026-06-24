@@ -4,6 +4,29 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project aims to
 follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.0] - 2026-06-24
+
+Stronger media encryption, clearer verification, and better video.
+
+### Security
+- Separate audio key space: HKDF now derives six keys (chat, video, audio, each
+  per direction) instead of sharing one media key for audio and video.
+- Per-frame media IV is now a 4-byte random per-stream prefix plus an 8-byte
+  counter, so an IV can never repeat within a stream.
+- Per-frame encryption is negotiated bilaterally via an `fenc` advertisement in
+  the key exchange; it is enabled only when both peers support Insertable
+  Streams, and mixed-browser calls fall back cleanly to DTLS-SRTP. The in-call
+  badge reflects the active mode (frames vs DTLS-SRTP).
+
+### Changed
+- Safety-number verification now shows named emoji (each labelled so the codes
+  can be read aloud) alongside the hex, and the app prompts once to compare it.
+
+### Performance
+- Video capture requests 720p/30fps with echo cancellation, noise suppression,
+  and auto gain; the video sender is tuned (content hint, ~2.5 Mbps cap,
+  balanced degradation) for sharper motion.
+
 ## [1.2.0] - 2026-06-24
 
 UI/UX pass: invite sharing, responsiveness, and a few security/performance
