@@ -72,7 +72,7 @@ INDEX_HTML = """<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Keywave - Privacy That Flows.</title>
 <link href="/static/fonts.css" rel="stylesheet">
 <script src="/static/socket.io.min.js"></script>
@@ -748,21 +748,76 @@ body::before {
 @keyframes toastOut { from { opacity: 1; } to { opacity: 0; transform: translateY(-6px); } }
 
 /* ══════════════════════════════════════════════════════════
-   RESPONSIVE
+   INVITE / SHARE
 ══════════════════════════════════════════════════════════ */
-@media (max-width: 700px) {
+.invite-card {
+  width: 100%; max-width: 440px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 20px;
+}
+.share-link-row { display: flex; gap: 8px; margin-bottom: 14px; }
+.share-link-row .inp {
+  font-size: 13px; letter-spacing: 1px; text-transform: none;
+  padding: 10px 12px;
+}
+.share-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+}
+.share-btn {
+  font-family: var(--font-ui);
+  font-size: 10px; letter-spacing: 1px;
+  padding: 12px 6px; min-height: 46px;
+  border: 1px solid var(--border-hi);
+  background: var(--panel2); color: var(--text-hi);
+  border-radius: var(--radius);
+  cursor: pointer; text-transform: uppercase;
+  transition: var(--transition);
+}
+.share-btn:hover    { border-color: var(--blue);  color: var(--blue); }
+.share-btn.wa:hover { border-color: #25d366; color: #25d366; }
+.share-btn.tg:hover { border-color: #29a9eb; color: #29a9eb; }
+.share-btn.go:hover { border-color: var(--neon); color: var(--neon); }
+.share-hint { font-size: 10px; margin-top: 12px; line-height: 1.5; text-align: center; }
+
+/* ══════════════════════════════════════════════════════════
+   RESPONSIVE  (desktop + phones, safe-area aware)
+══════════════════════════════════════════════════════════ */
+#session-header { padding-top: env(safe-area-inset-top); }
+#controls-bar   { padding-bottom: env(safe-area-inset-bottom); }
+#screen-landing, #screen-waiting {
+  padding-left:  max(20px, env(safe-area-inset-left));
+  padding-right: max(20px, env(safe-area-inset-right));
+}
+
+@media (max-width: 760px) {
   #screen-session {
     grid-template-columns: 1fr;
-    grid-template-rows: 48px 200px 1fr 52px;
+    grid-template-rows: auto minmax(180px, 36vh) 1fr auto;
     grid-template-areas:
       "header"
       "video"
       "chat"
       "controls";
   }
+  #session-header { height: auto; min-height: 48px; flex-wrap: wrap; gap: 8px 14px; padding: 8px 14px; }
+  .header-status { gap: 10px; flex-wrap: wrap; }
+  #controls-bar { min-height: 56px; padding: 8px 14px; }
   #chat-panel { border-left: none; border-top: 1px solid var(--border); }
+  #local-video { width: 96px; height: 64px; bottom: 12px; right: 12px; }
   .logo-title { font-size: 32px; letter-spacing: 6px; }
-  .room-id-display { font-size: 26px; letter-spacing: 8px; }
+  .room-id-display { font-size: 26px; letter-spacing: 8px; padding: 18px 20px; }
+  .ctrl-btn { width: 44px; height: 44px; }      /* comfortable touch targets */
+  .ctrl-end { width: 52px; height: 44px; }
+  .crypto-info { display: none; }                /* free up width on small bars */
+}
+
+@media (max-width: 360px) {
+  .share-grid { grid-template-columns: repeat(2, 1fr); }
+  .logo-title { font-size: 26px; letter-spacing: 4px; }
 }
 
 /* ══════════════════════════════════════════════════════════
@@ -846,15 +901,28 @@ body::before {
   <div id="screen-waiting" class="hidden">
     <div class="wait-label">// Secure Room Created</div>
     <div class="room-id-display" id="waiting-room-id">——————</div>
-    <div style="display:flex;align-items:center;gap:10px">
+    <div style="display:flex;align-items:center;gap:10px;justify-content:center">
       <div class="pulse-indicator"></div>
-      <button class="btn btn-secondary" id="copy-btn" onclick="UI.copyRoomId()">Copy ID</button>
+      <span class="wait-label" style="letter-spacing:2px">Waiting for peer to join…</span>
     </div>
-    <div class="wait-hint dim">
-      Share the Room ID with your peer.<br>
-      Connection is established peer-to-peer.<br>
-      Server never sees your messages or keys.
+
+    <div class="invite-card">
+      <div class="card-label">// Invite link &nbsp;·&nbsp; auto-joins on open</div>
+      <div class="share-link-row">
+        <input id="share-link" class="inp" readonly value="" onfocus="this.select()" aria-label="Invite link">
+        <button class="btn btn-secondary" onclick="Share.copyLink()">Copy</button>
+      </div>
+      <div class="share-grid">
+        <button class="share-btn go" id="share-native-btn" onclick="Share.native()">↗ Share…</button>
+        <button class="share-btn wa" onclick="Share.wa()">WhatsApp</button>
+        <button class="share-btn tg" onclick="Share.tg()">Telegram</button>
+        <button class="share-btn" onclick="Share.email()">Email</button>
+        <button class="share-btn" onclick="Share.sms()">SMS</button>
+        <button class="share-btn" onclick="UI.copyRoomId()">Copy ID</button>
+      </div>
+      <div class="share-hint dim">Use “Share…” for Signal, Session, Tox, Element and anything else installed. Peer-to-peer; the server never sees your messages or keys.</div>
     </div>
+
     <button class="btn" style="border-color:var(--text-lo);color:var(--text)" onclick="UI.goHome()">Cancel</button>
   </div>
 
@@ -920,6 +988,7 @@ body::before {
     <div id="controls-bar">
       <button class="ctrl-btn active" id="btn-mic" title="Toggle microphone" onclick="Media.toggleMic()">🎤</button>
       <button class="ctrl-btn active" id="btn-cam" title="Toggle camera" onclick="Media.toggleCam()">📷</button>
+      <button class="ctrl-btn" id="btn-invite" title="Invite / share link" onclick="Share.quick()">↗</button>
       <button class="ctrl-end" title="End session" onclick="UI.hangup()">✕</button>
       <div class="crypto-info" id="crypto-info">
         <span>&#x1F512;</span> E2E ENCRYPTED
@@ -954,6 +1023,9 @@ body::before {
 ═══════════════════════════════════════════════════════ -->
 <script>
 'use strict';
+
+const TE = new TextEncoder();
+const TD = new TextDecoder();
 
 /* ══════════════════════════════════════════════════════════
    STATE
@@ -1075,11 +1147,11 @@ const Crypto = {
 
   async encryptMsg(text, seq, ts) {
     const iv  = crypto.getRandomValues(new Uint8Array(12));
-    const aad = new TextEncoder().encode(seq + ':' + ts);
+    const aad = TE.encode(seq + ':' + ts);
     const ct  = await crypto.subtle.encrypt(
       { name: 'AES-GCM', iv, additionalData: aad },
       S.chatEncKey,
-      new TextEncoder().encode(text)
+      TE.encode(text)
     );
     const b64 = (buf) => btoa(String.fromCharCode(...new Uint8Array(buf)));
     return { ct: b64(ct), nonce: b64(iv) };
@@ -1088,13 +1160,13 @@ const Crypto = {
   async decryptMsg(ctB64, nonceB64, seq, ts) {
     try {
       const from64 = b64 => Uint8Array.from(atob(b64), c => c.charCodeAt(0));
-      const aad = new TextEncoder().encode(seq + ':' + ts);
+      const aad = TE.encode(seq + ':' + ts);
       const pt = await crypto.subtle.decrypt(
         { name: 'AES-GCM', iv: from64(nonceB64), additionalData: aad },
         S.chatDecKey,
         from64(ctB64)
       );
-      return new TextDecoder().decode(pt);
+      return TD.decode(pt);
     } catch {
       return '[⚠ AUTHENTICATION FAILED]';
     }
@@ -1284,22 +1356,33 @@ const Chat = {
     const area   = document.getElementById('messages-area');
     const bubble = document.createElement('div');
     bubble.className = `msg-bubble ${who}`;
-    const time   = new Date(ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-    bubble.innerHTML = `
-      <div class="msg-meta"><span>${who === 'local' ? 'ME' : 'PEER'}</span><span>${time}</span><span class="msg-lock">🔒</span></div>
-      <div class="msg-body">${this._esc(text)}</div>`;
-    area.appendChild(bubble);
-    area.scrollTop = area.scrollHeight;
+    const meta = document.createElement('div');
+    meta.className = 'msg-meta';
+    const whoEl = document.createElement('span');
+    whoEl.textContent = who === 'local' ? 'ME' : 'PEER';
+    const timeEl = document.createElement('span');
+    timeEl.textContent = new Date(ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    const lock = document.createElement('span');
+    lock.className = 'msg-lock'; lock.textContent = '🔒';
+    meta.append(whoEl, timeEl, lock);
+    const body = document.createElement('div');
+    body.className = 'msg-body';
+    body.textContent = text;   // textContent => message content can never inject markup
+    bubble.append(meta, body);
+    this._push(area, bubble);
   },
   sysMsg(text, type = '') {
     const area = document.getElementById('messages-area');
     const el   = document.createElement('div');
     el.className = `sys-msg ${type}`;
     el.textContent = `⬡ ${text}`;
-    area.appendChild(el);
+    this._push(area, el);
+  },
+  _push(area, node) {
+    area.appendChild(node);
+    while (area.children.length > 250) area.removeChild(area.firstChild);  // bound DOM growth
     area.scrollTop = area.scrollHeight;
   },
-  _esc(s) { return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); },
 };
 
 /* ══════════════════════════════════════════════════════════
@@ -1440,9 +1523,20 @@ const Signaling = {
 ══════════════════════════════════════════════════════════ */
 const UI = {
   createRoom()  { S.socket.emit('create_room'); },
-  joinRoom()    { const rid = document.getElementById('room-input').value.trim(); if (rid) S.socket.emit('join', { room_id: rid }); },
+  joinRoom() {
+    const rid = (document.getElementById('room-input').value || '').trim().toUpperCase();
+    if (!validRoomId(rid)) { toast('Enter a valid 10-character room ID', 'warn'); return; }
+    S.socket.emit('join', { room_id: rid });
+  },
   copyRoomId()  { if (S.roomId) navigator.clipboard.writeText(S.roomId).then(() => toast('Room ID copied', 'ok')); },
-  showWaiting(room_id) { show('screen-waiting'); document.getElementById('waiting-room-id').textContent = room_id; },
+  showWaiting(room_id) {
+    show('screen-waiting');
+    document.getElementById('waiting-room-id').textContent = room_id;
+    const link = document.getElementById('share-link');
+    if (link) link.value = Share.link();
+    const nb = document.getElementById('share-native-btn');
+    if (nb) nb.style.display = (typeof navigator.share === 'function') ? '' : 'none';
+  },
   showSession() { show('screen-session'); },
   goHome()      { show('screen-landing'); S.roomId = null; },
   hangup() {
@@ -1464,8 +1558,38 @@ const UI = {
 };
 
 /* ══════════════════════════════════════════════════════════
+   SHARE / INVITE
+══════════════════════════════════════════════════════════ */
+const Share = {
+  link() {
+    const base = location.origin + location.pathname;
+    return base + '#room=' + encodeURIComponent(S.roomId || '');
+  },
+  blurb() { return 'Join my end-to-end encrypted Keywave room: '; },
+  message() { return this.blurb() + this.link(); },
+  _open(url) { window.open(url, '_blank', 'noopener,noreferrer'); },
+  async native() {
+    if (typeof navigator.share !== 'function') { this.copyLink(); return; }
+    try { await navigator.share({ title: 'Keywave invite', text: this.blurb(), url: this.link() }); }
+    catch (e) { /* user dismissed the share sheet */ }
+  },
+  quick() { if (typeof navigator.share === 'function') this.native(); else this.copyLink(); },
+  wa()    { this._open('https://wa.me/?text=' + encodeURIComponent(this.message())); },
+  tg()    { this._open('https://t.me/share/url?url=' + encodeURIComponent(this.link()) + '&text=' + encodeURIComponent(this.blurb())); },
+  email() { this._open('mailto:?subject=' + encodeURIComponent('Keywave invite') + '&body=' + encodeURIComponent(this.message())); },
+  sms()   { location.href = 'sms:?&body=' + encodeURIComponent(this.message()); },
+  copyLink() {
+    if (!S.roomId) { toast('No active room', 'warn'); return; }
+    navigator.clipboard.writeText(this.link()).then(() => toast('Invite link copied', 'ok'),
+                                                    () => toast('Copy failed', 'error'));
+  },
+};
+
+/* ══════════════════════════════════════════════════════════
    HELPERS
 ══════════════════════════════════════════════════════════ */
+function validRoomId(r) { return /^[0-9A-F]{10}$/.test(r); }
+
 function show(id) {
   ['screen-landing','screen-waiting','screen-session'].forEach(s =>
     document.getElementById(s).classList.toggle('hidden', s !== id));
@@ -1485,6 +1609,16 @@ function toast(msg, type = '') {
   try {
     await Crypto.init();
     Signaling.connect();
+    // Auto-join from an invite link (#room=ID). The fragment is never sent to
+    // the server; socket.io buffers this emit until the connection is ready.
+    const hm = (location.hash || '').match(/room=([0-9A-Fa-f]{10})/);
+    if (hm) {
+      const rid = hm[1].toUpperCase();
+      const inp = document.getElementById('room-input');
+      if (inp) inp.value = rid;
+      toast('Joining room from invite…', 'ok');
+      S.socket.emit('join', { room_id: rid });
+    }
   } catch(e) {
     console.error('[Keywave boot error]', e);
     toast('Boot error: ' + e.message, 'error');

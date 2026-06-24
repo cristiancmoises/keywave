@@ -11,7 +11,9 @@ message or call content.
 ## Features
 
 - 1:1 text chat and video/audio calls, encrypted in the browser.
-- Works on desktop and mobile with a responsive layout.
+- Works on desktop and mobile with a responsive, touch-friendly layout.
+- Invite by link: a share sheet plus one-tap WhatsApp, Telegram, email, and SMS,
+  or copy the link / room ID. Opening an invite link auto-joins the room.
 - Safety-number verification to detect a man-in-the-middle.
 - Per-frame media encryption on Chromium browsers (Insertable Streams).
 - Single self-contained service: the client is embedded in `app.py` and all
@@ -32,10 +34,16 @@ Endpoints: `GET /healthz` (status + active room count).
 
 ## Connecting a peer
 
-Create a room, copy the room ID from the waiting screen, and send it to your
-peer over any channel. They paste it into "Join Existing Room". A room holds at
-most two peers and is one-time use: anyone who has the ID can take the second
-slot, so after connecting, verify the safety number (see
+Create a room. The waiting screen shows an invite link and quick share buttons:
+a native share sheet (covering Signal, Session, Tox, Element, and anything else
+installed) plus one-tap WhatsApp, Telegram, email, and SMS, with "Copy" for the
+link and "Copy ID" for the room ID alone. The room ID travels in the URL
+fragment (`#room=ID`), which browsers never send to the server, and opening the
+link auto-joins the room. There is also an invite button (↗) in the call
+controls.
+
+A room holds at most two peers and is one-time use: anyone who has the link can
+take the second slot, so after connecting, verify the safety number (see
 [SECURITY.md](./SECURITY.md)) to confirm no one is in the middle.
 
 ## Running on a phone or over a network

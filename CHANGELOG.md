@@ -4,6 +4,33 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project aims to
 follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.0] - 2026-06-24
+
+UI/UX pass: invite sharing, responsiveness, and a few security/performance
+touches.
+
+### Added
+- Invite sharing on the waiting screen: an invite link plus a native share
+  sheet and one-tap WhatsApp, Telegram, email, and SMS, with copy-link and
+  copy-ID buttons. An invite (↗) button is also available in the call controls.
+- Invite links carry the room in the URL fragment (`#room=ID`); opening one
+  auto-joins the room. The fragment is never sent to the server.
+
+### Changed
+- Responsive layout reworked for phones and desktop: safe-area insets for
+  notched devices, larger touch targets, a smaller picture-in-picture on small
+  screens, and a wrapping header.
+
+### Security
+- Chat messages render via `textContent` / DOM nodes instead of HTML string
+  interpolation, so message content can never inject markup.
+- Room IDs entered to join (and parsed from invite links) are validated
+  client-side before they are sent.
+
+### Performance
+- Shared `TextEncoder` / `TextDecoder` instances on the chat path.
+- Chat history is capped in the DOM to bound memory on long sessions.
+
 ## [1.1.0] - 2026-06-24
 
 The repository now tracks the single-file build that runs in production: the
