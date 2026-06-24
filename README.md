@@ -11,11 +11,11 @@ message or call content.
 ## Features
 
 - 1:1 text chat and video/audio calls, encrypted in the browser.
-- Works on desktop and mobile, with a responsive layout and camera switching.
-- Invite by link: native share sheet plus WhatsApp, Telegram, email, SMS, and
-  copy. Opening an invite link auto-joins the room.
+- Works on desktop and mobile with a responsive layout.
 - Safety-number verification to detect a man-in-the-middle.
-- Single static client, no build step. Self-hosted assets, no CDN.
+- Per-frame media encryption on Chromium browsers (Insertable Streams).
+- Single self-contained service: the client is embedded in `app.py` and all
+  assets (socket.io, fonts) are self-hosted. No CDN, no third-party origins.
 
 ## Quick start
 
@@ -24,64 +24,50 @@ docker compose up -d --build
 ```
 
 Open <http://localhost:5128>. To try it on one machine, open it in two browser
-windows: create a room in the first and use the invite link in the second.
-`localhost` is a secure context, so the camera and Web Crypto work without TLS.
+windows: create a room in the first, copy the room ID, and join with it in the
+second. `localhost` is a secure context, so the camera and Web Crypto work
+without TLS.
 
-Endpoints: `GET /healthz` (status), `GET /config` (ICE/TURN servers).
+Endpoints: `GET /healthz` (status + active room count).
 
-## Sharing an invite
+## Connecting a peer
 
-After creating a room, the invite panel offers a native share sheet (covering
-Signal, Session, Tox, Element, and anything else installed) plus one-tap
-WhatsApp, Telegram, email, SMS, and copy. The room ID travels in the URL
-fragment (`#room=ID`), which browsers never send to the server, and the link
-auto-joins on open.
-
-A room ID is a one-time key: anyone who has it can take one of the two slots.
-After connecting, verify the safety number (see [SECURITY.md](./SECURITY.md)).
+Create a room, copy the room ID from the waiting screen, and send it to your
+peer over any channel. They paste it into "Join Existing Room". A room holds at
+most two peers and is one-time use: anyone who has the ID can take the second
+slot, so after connecting, verify the safety number (see
+[SECURITY.md](./SECURITY.md)) to confirm no one is in the middle.
 
 ## Running on a phone or over a network
 
-Phones can't use `localhost`, so they need a secure context over the network.
-Options:
+Phones can't use `localhost`, so they need a secure context (HTTPS) over the
+network. Two practical options:
 
 1. **Reverse proxy with a real certificate** (recommended). Put Keywave behind
    Nginx Proxy Manager, Caddy, or Traefik with a domain and a Let's Encrypt
-   certificate. See the notes at the bottom of `docker-compose.yml`.
-2. **Self-signed certificate on the LAN** (quick test). The certificate must
-   include the machine's LAN IP as a Subject Alternative Name:
+   certificate, pointed at `http://keywave:5000` with WebSocket upgrade headers
+   enabled. See the notes at the bottom of `docker-compose.yml`.
+2. **A tunnel** (cloudflared, ngrok, tailscale-funnel) that terminates HTTPS.
 
-   ```bash
-   openssl req -x509 -newkey rsa:2048 -nodes -days 365 \
-     -keyout key.pem -out cert.pem \
-     -subj "/CN=192.168.1.50" -addext "subjectAltName=IP:192.168.1.50"
-
-   KEYWAVE_ASYNC=threading KEYWAVE_TLS_CERT=cert.pem KEYWAVE_TLS_KEY=key.pem python app.py
-   ```
-
-   Open `https://192.168.1.50:5000` and accept the warning.
-3. **A tunnel** (cloudflared, ngrok, tailscale-funnel) that terminates HTTPS.
-
-For calls between two mobile networks or behind carrier-grade NAT, STUN alone is
-usually not enough; configure a TURN relay (see Configuration). A TURN relay
-only forwards encrypted media.
+Calls connect peer-to-peer using public STUN. Between two mobile networks or
+behind carrier-grade NAT this can fail; this build does not ship a configurable
+TURN relay, so deploy one and adjust the ICE configuration if you need that.
 
 ## Configuration
 
-Everything is optional and set via environment variables. The full list is in
-the header comment of `app.py`; the most useful:
+Everything is optional and set via environment variables.
 
 | Variable | Purpose | Default |
 | --- | --- | --- |
-| `KEYWAVE_PORT` | Bind port | `5000` |
+| `KEYWAVE_PORT` | Bind port inside the container | `5000` |
 | `KEYWAVE_ALLOWED_ORIGINS` | CORS allowlist (`*` or comma-separated) | `*` |
-| `STUN_URLS` | STUN servers (comma-separated) | Google STUN |
-| `TURN_URLS` | TURN servers | none |
-| `TURN_USERNAME` / `TURN_CREDENTIAL` | Static TURN credentials | none |
-| `TURN_STATIC_SECRET` | coturn REST shared secret (time-limited creds) | none |
 | `KEYWAVE_MAX_ROOMS` | Global room cap | `5000` |
-| `KEYWAVE_ROOM_TTL` | Seconds a half-open room lives | `7200` |
-| `KEYWAVE_TLS_CERT` / `KEYWAVE_TLS_KEY` | Enable HTTPS in the dev runner | none |
+| `KEYWAVE_ROOM_TTL` | Seconds a half-open room lives before reaping | `7200` |
+| `KEYWAVE_CREATE_MAX` / `KEYWAVE_CREATE_WINDOW` | Room-creation rate limit (count / seconds) | `10` / `60` |
+| `KEYWAVE_MSG_MAX` / `KEYWAVE_MSG_WINDOW` | Relayed-message rate limit (count / seconds) | `120` / `10` |
+| `KEYWAVE_MAX_PAYLOAD` | Max bytes per relayed field | `262144` |
+
+Lock `KEYWAVE_ALLOWED_ORIGINS` to your real origin in production.
 
 ## How it works
 
@@ -95,10 +81,9 @@ including the threat model and known limitations, are in
 ## Project layout
 
 ```
-app.py             Flask + Socket.IO relay server
-index.html         Single-page client (HTML, CSS, JS; no build step)
-static/            Self-hosted socket.io client and fonts
-Dockerfile         gunicorn + gevent-websocket
+app.py             Flask + Socket.IO relay, with the client embedded as HTML
+static/            Self-hosted socket.io client and fonts (no CDN)
+Dockerfile         python:3.12-slim, runs app.py behind your reverse proxy
 docker-compose.yml
 ```
 

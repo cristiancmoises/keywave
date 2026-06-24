@@ -26,7 +26,7 @@ that is part of your threat model, run it over a network layer that does.
 ## Cryptography
 
 All primitives use the browser's Web Crypto API. No third-party crypto code is
-loaded.
+loaded; the socket.io client and fonts are self-hosted.
 
 ### Key agreement
 
@@ -36,12 +36,12 @@ shared secret.
 
 ### Key derivation
 
-HKDF-SHA-256 expands the shared secret into six independent AES-256-GCM keys:
-chat, video, and audio, each split into a send and receive key. The `info`
-string is `keywave:{chat|video|audio}:{A->B|B->A}`. Send/receive direction is
-assigned by a lexicographic comparison of the two base64 public keys, so the two
-peers derive mirror-image key sets. Each medium has its own key space, so frame
-nonces from different streams can never collide.
+HKDF-SHA-256 expands the shared secret into four independent AES-256-GCM keys:
+a send and receive key for chat, and a send and receive key for media. The
+`info` strings are `chat:A->B` / `chat:B->A` and `video:A->B` / `video:B->A`.
+Send/receive direction is assigned by a lexicographic comparison of the two
+base64 public keys, so the two peers derive mirror-image key sets. Audio and
+video frames share the media key for their direction.
 
 The HKDF salt is a fixed zero block. This is intentional and safe: the input key
 material is a high-entropy ephemeral ECDH secret, and the `info` strings provide
@@ -58,19 +58,16 @@ gives replay and reorder detection.
 ### Audio and video
 
 Media is encrypted per encoded frame with AES-256-GCM using WebRTC Insertable
-Streams. The IV is a 4-byte random per-stream prefix plus an 8-byte big-endian
-counter, so an IV is never reused within a stream.
+Streams. A fresh random 96-bit IV is generated for each frame and prepended to
+the ciphertext.
 
-Frame encryption is negotiated bilaterally: each peer advertises support, and it
-is enabled only if both peers support it. Insertable Streams is currently a
-Chromium feature, so a call involving Firefox or Safari falls back to WebRTC's
-transport encryption (DTLS-SRTP). The in-call badge reflects which mode is
-active rather than claiming frame encryption that is not running.
-
-Because calls are peer-to-peer (optionally via a TURN relay that only forwards
-encrypted packets), media is end-to-end encrypted at the transport layer even
-when per-frame encryption is unavailable. Per-frame encryption is defense in
-depth for paths that traverse a middlebox.
+Insertable Streams is a Chromium feature. This build enables per-frame
+encryption whenever the local browser supports it and does not negotiate it
+bilaterally, so **both peers should use a Chromium-based browser** for a call.
+Where Insertable Streams is unavailable on both ends, media is still protected
+by WebRTC's transport encryption (DTLS-SRTP); because calls are peer-to-peer,
+that remains end-to-end at the transport layer. Per-frame encryption is defense
+in depth for paths that traverse a middlebox (for example a TURN relay).
 
 ### Session verification (safety number)
 
@@ -81,7 +78,7 @@ keys (sorted), independent of direction. Honest peers compute the same value; an
 attacker sitting in the middle necessarily produces a different value on each
 side.
 
-The safety number is shown as five emoji for a quick visual check, with the full
+The safety number is shown as six emoji for a quick visual check, with the full
 64-bit value in hex in the verification dialog. Compare it with your peer over
 the live call. If the codes match, no one is intercepting the keys. Until you
 confirm, the session is shown as unverified.
@@ -89,12 +86,12 @@ confirm, the session is shown as unverified.
 ## Verifying a session
 
 1. Connect to a peer.
-2. Open the **Safety** control in the call header.
+2. Open the **Safety #** control in the call header.
 3. Read the emoji (or hex) aloud and confirm they match on both screens.
 4. If they match, mark the session verified. If they differ, end the call.
 
-This step is what makes it safe to share a room link over a messaging app: even
-if the link is intercepted, an attacker who joins cannot reproduce your safety
+This step is what makes it safe to share a room ID over a messaging app: even
+if the ID is intercepted, an attacker who joins cannot reproduce your safety
 number.
 
 ## Known limitations
@@ -109,22 +106,27 @@ number.
 - **Verification is manual.** If users skip the safety-number comparison, a
   relay-level MITM is not automatically detected. The app surfaces an unverified
   state but does not block media, because the call itself is needed to compare.
-- **Per-frame media E2E is Chromium-only** today; other browsers use DTLS-SRTP.
+- **Per-frame media E2E is Chromium-only** and is not negotiated bilaterally in
+  this build, so a call should use the same browser family on both ends; mixed
+  Chromium/non-Chromium calls are not supported. Other cases fall back to
+  DTLS-SRTP.
 - **No metadata protection** (IPs, timing, who-talks-to-whom).
 - **No in-session ratchet.** Keys are ephemeral per session and discarded on
   hangup, which gives forward secrecy across sessions; there is no key rotation
   within a single session (sessions are short-lived).
+- **No bundled TURN.** Only public STUN is used, so calls across symmetric NAT
+  or carrier-grade NAT may fail until you add a TURN relay.
 
 ## Server hardening
 
-- Per-request CSP nonce and a strict policy with no third-party origins
-  (socket.io and fonts are self-hosted).
-- Response headers: `X-Content-Type-Options`, `Referrer-Policy`,
-  `X-Frame-Options`, `Permissions-Policy`, `Cross-Origin-Opener-Policy`, and
-  HSTS over HTTPS.
+- A strict Content-Security-Policy limited to self-hosted origins with no
+  third-party sources. Inline event handlers in the client require
+  `'unsafe-inline'` for scripts; everything else is `'self'`.
+- Response headers: `X-Content-Type-Options`, `X-Frame-Options`,
+  `Referrer-Policy`, `Permissions-Policy`, and `Cross-Origin-Opener-Policy`.
 - Abuse limits: room-creation rate limit, global room cap, relay rate limiting,
-  per-event payload validation, a socket buffer cap, and a background sweeper
-  that reaps abandoned rooms.
+  per-event payload size validation, a socket buffer cap, and a background
+  sweeper that reaps abandoned rooms. One room per client prevents room leaks.
 - No persistence: rooms and sessions live only in memory.
 - Container runs as a non-root user with `cap_drop: ALL`, `no-new-privileges`, a
   read-only root filesystem, and memory/PID limits.
@@ -132,7 +134,8 @@ number.
 ## Supported browsers
 
 - Chrome / Edge / Chromium 86+: full chat and per-frame media encryption.
-- Firefox / Safari: full chat encryption; media uses DTLS-SRTP.
+- Firefox / Safari: full chat encryption; media uses DTLS-SRTP (use the same
+  browser family on both ends).
 - A secure context is required (`https://` or `http://localhost`); camera access
   and Web Crypto are unavailable on plain-HTTP origins.
 

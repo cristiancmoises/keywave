@@ -4,6 +4,41 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project aims to
 follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.0] - 2026-06-24
+
+The repository now tracks the single-file build that runs in production: the
+client is embedded in `app.py` and all assets are self-hosted. This release
+folds a security review of that build back into the repo.
+
+### Added
+- Safety-number (SAS) verification derived from the shared secret and both
+  public keys, with an in-call emoji/hex comparison flow to detect a MITM.
+- `GET /healthz` endpoint (status and active room count).
+- Environment configuration: CORS allowlist, room cap and TTL, room-creation
+  and message rate limits, and a per-field payload cap.
+
+### Changed
+- The client is embedded in `app.py` again; the standalone `index.html` was
+  removed to avoid a drifting duplicate.
+- socket.io and fonts are self-hosted under `static/`; the CDN script and
+  Google Fonts (and the third-party origins they implied) were removed.
+- Chat messages now carry a sequence number bound as AES-GCM AAD.
+
+### Security
+- Strict Content-Security-Policy limited to self-hosted origins, plus the full
+  set of response security headers.
+- Chat binds sequence number and timestamp as AAD for replay/reorder detection.
+- Abuse limits: room-creation rate limit, global room cap, relay rate limiting,
+  per-event payload validation, socket buffer cap, and a background sweeper.
+- Fixed a per-client room leak when a client created multiple rooms.
+- Container hardening: read-only root filesystem, `cap_drop: ALL`,
+  `no-new-privileges`, and memory/PID limits.
+
+### Known gaps
+- Per-frame media encryption is not negotiated bilaterally, so a call should use
+  the same browser family on both ends.
+- No bundled TURN relay; only public STUN is configured.
+
 ## [1.0.0] - 2026-06-24
 
 First hardened release. Mobile support, link sharing, session verification, and
