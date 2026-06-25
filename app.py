@@ -1133,6 +1133,8 @@ const S = {
   iceRestartTimer: null, // recovery timer if a restart answer never arrives
   disconnectTimer: null, // nudge timer for the 'disconnected' state
   pendingIce:    [],     // ICE candidates buffered until remoteDescription is set
+  remoteStream:  null,   // MediaStream shown in the remote <video>
+  tapArmed:      false,  // a tap-to-play fallback is waiting for a user gesture
   mediaReady:    null,   // Promise<boolean> — resolves when getUserMedia settles
   sessionToken:  null,   // per-session token used to rejoin after a reconnect
   peerFenc:      false,  // peer advertised Insertable Streams support
@@ -1423,11 +1425,17 @@ const WebRTC = {
     });
     S.pc.ontrack = (e) => {
       const rv = document.getElementById('remote-video');
-      if (rv.srcObject !== e.streams[0]) {
-        rv.srcObject = e.streams[0];
-        document.getElementById('video-overlay').classList.add('hidden');
-        Status.setVideo(true);
-      }
+      // Keep one remote stream; some browsers deliver tracks without an
+      // associated stream, so build one if needed.
+      let stream = (e.streams && e.streams[0]) || S.remoteStream || new MediaStream();
+      S.remoteStream = stream;
+      if (e.track) { try { if (!stream.getTracks().includes(e.track)) stream.addTrack(e.track); } catch (_) {} }
+      if (rv.srcObject !== stream) rv.srcObject = stream;
+      document.getElementById('video-overlay').classList.add('hidden');
+      Status.setVideo(true);
+      // The `autoplay` attribute alone is unreliable for srcObject (a peer can
+      // be left paused at readyState 0); kick playback explicitly.
+      this._playRemote(rv);
       if (S.frameEncActive) VideoE2E.wrapReceiver(e.receiver);
     };
     S.pc.onicecandidate = (e) => { if (e.candidate) S.socket.emit('ice', { candidate: e.candidate }); };
@@ -1500,6 +1508,32 @@ const WebRTC = {
         if (S.pc && S.pc.connectionState !== 'connected') this.restartIce();
       }, 8000);
     } catch (e) { S.iceRestarting = false; }
+  },
+  _playRemote(rv) {
+    if (!rv) return;
+    const armUnmuteTap = (msg) => {
+      if (S.tapArmed) return;
+      S.tapArmed = true;
+      try { Chat.sysMsg(msg, 'warn'); } catch (_) {}
+      const resume = () => {
+        S.tapArmed = false;
+        document.removeEventListener('pointerdown', resume);
+        document.removeEventListener('keydown', resume);
+        rv.muted = false;
+        rv.play().catch(() => {});
+      };
+      document.addEventListener('pointerdown', resume, { once: true });
+      document.addEventListener('keydown', resume, { once: true });
+    };
+    // `autoplay` alone is unreliable for srcObject, so play() explicitly. If
+    // unmuted playback is blocked (common on iOS/Safari), fall back to muted so
+    // the video is still visible, and offer to enable audio on a tap.
+    rv.play().catch(() => {
+      rv.muted = true;
+      rv.play()
+        .then(() => armUnmuteTap('Video started muted — tap anywhere to enable audio'))
+        .catch(() => armUnmuteTap('Tap anywhere to start the call video and audio'));
+    });
   },
   async _tuneVideo(track, sender) {
     try { track.contentHint = 'motion'; } catch (e) {}
@@ -1863,6 +1897,7 @@ const Signaling = {
       S.iceRestarting = false; S.iceRestartAttempts = 0; S.pendingIce = [];
       const rv = document.getElementById('remote-video');
       if (rv) rv.srcObject = null;
+      S.remoteStream = null; S.tapArmed = false;
       document.getElementById('video-overlay')?.classList.remove('hidden');
       S.keysReady = false; S.txSeq = 0; S.rxSeq = 0;
       S.verified = false;
@@ -1930,6 +1965,7 @@ const UI = {
     if (S.pc) { S.pc.close(); S.pc = null; }
     clearTimeout(S.iceRestartTimer); clearTimeout(S.disconnectTimer);
     S.iceRestarting = false; S.iceRestartAttempts = 0; S.pendingIce = [];
+    S.remoteStream = null; S.tapArmed = false;
     S.chatEncKey = null; S.chatDecKey = null;
     S.videoEncKey = null; S.videoDecKey = null;
     S.audioEncKey = null; S.audioDecKey = null;
@@ -2061,7 +2097,11 @@ def _secure_headers(resp):
 
 @app.route("/")
 def index():
-    return Response(INDEX_HTML, mimetype="text/html")
+    # Never cache the client: it is embedded here and changes on every deploy,
+    # so a cached copy would keep serving an old build after an update.
+    resp = Response(INDEX_HTML, mimetype="text/html")
+    resp.headers["Cache-Control"] = "no-store, must-revalidate"
+    return resp
 
 @app.route("/healthz")
 def healthz():

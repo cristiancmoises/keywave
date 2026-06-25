@@ -4,6 +4,36 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project aims to
 follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.4.2] - 2026-06-25
+
+Fixes remote video not appearing (each peer saw only their own camera).
+
+### Fixed
+- The remote `<video>` could stay paused at `readyState 0` even with a live
+  remote stream attached and media flowing — the `autoplay` attribute alone is
+  unreliable for a `srcObject` MediaStream, so one peer's remote video never
+  started. `ontrack` now calls `play()` explicitly. Verified with an automated
+  two-browser harness: before the fix one peer sat `paused:true, videoWidth:0`;
+  after, both play and decode frames.
+- Robust remote-stream attach: build a `MediaStream` from the incoming track if
+  the browser delivers tracks without an associated stream.
+
+- The client HTML was served with no cache headers, so browsers could keep
+  running a stale build after a deploy (and never pick up fixes). `/` now sends
+  `Cache-Control: no-store`.
+
+### Improved
+- If unmuted playback is blocked (common on iOS/Safari), the remote video now
+  falls back to playing muted so it is still visible, and offers to enable audio
+  on the next tap, instead of showing nothing.
+
+### Verified
+- Automated two-browser harness confirms both the per-frame-encrypted path (two
+  Chromium) and the DTLS-SRTP cross-browser fallback (one peer without Insertable
+  Streams) connect and render remote video on both sides. Calls that still fail
+  in practice were traced to privacy-hardened browsers (ungoogled-chromium can't
+  complete ICE even in a same-page loopback; LibreWolf blocks media), not Keywave.
+
 ## [1.4.1] - 2026-06-25
 
 Fixes two connection bugs found by an automated two-browser (DevTools Protocol)
