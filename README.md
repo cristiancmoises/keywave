@@ -20,7 +20,7 @@ message or call content.
 - Single self-contained service: the client is embedded in `app.py` and all
   assets (socket.io, fonts) are self-hosted. No CDN, no third-party origins.
 
-## Quick start
+## Quick start (local)
 
 ```bash
 docker compose up -d --build
@@ -29,7 +29,27 @@ docker compose up -d --build
 Open <http://localhost:5128>. To try it on one machine, open it in two browser
 windows: create a room in the first, copy the room ID, and join with it in the
 second. `localhost` is a secure context, so the camera and Web Crypto work
-without TLS.
+without TLS. Use a normal Chromium/Chrome or Firefox build — heavily
+privacy-hardened browsers (e.g. ungoogled-chromium, LibreWolf) can break WebRTC
+media and prevent the call from connecting.
+
+## Deploy for real (phones / different networks) in 3 steps
+
+Calls between two different networks need a TURN relay, and phones need HTTPS.
+Both are bundled — run the helper, open the ports, start it:
+
+```bash
+./setup.sh                                              # writes .env: TURN secret + your public IP
+# open UDP+TCP 3478, UDP 49160-49200 (TURN), and 80+443 if using the HTTPS profile
+docker compose --profile turn --profile tls up -d --build
+```
+
+`setup.sh` generates the shared TURN secret and auto-detects your public IP. The
+`tls` profile runs Caddy, which fetches a Let's Encrypt certificate for your
+domain automatically (point its DNS at the host first). Already have a reverse
+proxy? Drop `--profile tls` and point your proxy at `http://keywave:5000`. See
+[Running on a phone or over a network](#running-on-a-phone-or-over-a-network)
+for the details and how to verify the relay.
 
 Endpoints: `GET /healthz` (status + active room count) and `GET /config` (ICE
 servers for the client).
@@ -122,6 +142,7 @@ Everything is optional and set via environment variables.
 | `KEYWAVE_TURN_SECRET` | Shared secret matching coturn `static-auth-secret` (placeholder is ignored) | _(unset)_ |
 | `KEYWAVE_TURN_EXTERNAL_IP` | Public IP coturn advertises (required on 1:1-NAT clouds) | _(unset)_ |
 | `KEYWAVE_TURN_TLS` | Also advertise `turns:` on 443 (needs TLS coturn) (`1` to enable) | _(off)_ |
+| `KEYWAVE_DOMAIN` | Domain for the optional Caddy `tls` profile (auto-HTTPS) | _(unset)_ |
 | `KEYWAVE_TURN_TTL` | Lifetime of a minted TURN credential (seconds) | `86400` |
 | `KEYWAVE_TURN_URL` / `_USER` / `_PASS` | External TURN with static credentials | _(unset)_ |
 | `KEYWAVE_FORCE_RELAY` | Force all media through TURN (`1` to enable) | _(off)_ |
@@ -145,7 +166,10 @@ including the threat model and known limitations, are in
 app.py             Flask + Socket.IO relay, with the client embedded as HTML
 static/            Self-hosted socket.io client and fonts (no CDN)
 Dockerfile         python:3.12-slim, runs app.py behind your reverse proxy
-docker-compose.yml
+docker-compose.yml keywave + opt-in coturn (turn) + opt-in Caddy HTTPS (tls)
+setup.sh           Generates .env (TURN secret + public IP) for a VPS deploy
+Caddyfile          Auto-HTTPS reverse proxy used by the `tls` profile
+.env.example       All deployment variables, documented
 ```
 
 ## Links

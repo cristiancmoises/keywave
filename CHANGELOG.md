@@ -4,6 +4,33 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project aims to
 follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.5.0] - 2026-06-25
+
+One-command, self-hosted deployment for real (phones / cross-network) calls —
+without adding any third-party service.
+
+### Added
+- `setup.sh`: generates `.env` with a strong random TURN secret and your
+  auto-detected public IP, so the bundled relay works without hand-editing.
+- Optional automatic HTTPS via a Caddy `tls` compose profile: fetches and renews
+  a Let's Encrypt certificate for `KEYWAVE_DOMAIN` and reverse-proxies the app
+  (WebSockets included). Opt-in; skip it if you already run a reverse proxy.
+- `Caddyfile` and `KEYWAVE_DOMAIN` setting; README "Deploy for real in 3 steps".
+
+### Security / Performance (validated)
+- No third-party origins or CDN added — the strict CSP, self-hosted assets, and
+  container hardening (read-only rootfs, `cap_drop: ALL`, non-root, mem/PID
+  limits) are unchanged; `.env` is git-ignored and chmod 600.
+- Re-verified end to end with an automated two-browser harness: direct P2P and
+  forced-TURN-relay calls both connect and carry per-frame-encrypted video
+  (zero decrypt failures); media tuning stays 720p/30 at a ~2.5 Mbps cap.
+
+### Note
+- Evaluated hosted signaling (ScaleDrone) and deliberately did not adopt it: it
+  only replaces signaling (which already works), does not provide TURN (the
+  actual cross-network blocker), and would add a third-party dependency that
+  breaks the self-hosted / no-third-party-origin model.
+
 ## [1.4.3] - 2026-06-25
 
 Fixes the bundled TURN relay, verified end to end.

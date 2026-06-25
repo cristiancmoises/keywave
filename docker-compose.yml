@@ -72,10 +72,35 @@ services:
         --no-multicast-peers
         $${KEYWAVE_TURN_EXTERNAL_IP:+--external-ip=$${KEYWAVE_TURN_EXTERNAL_IP}}
 
-# ── Optional: put behind your existing Nginx Proxy Manager ───────────────────
-# Point NPM at http://keywave:5000 with WebSocket support enabled.
-# In NPM advanced config add:
-#   proxy_http_version 1.1;
-#   proxy_set_header Upgrade $http_upgrade;
-#   proxy_set_header Connection "upgrade";
-# ─────────────────────────────────────────────────────────────────────────────
+  # ── Optional automatic HTTPS (opt-in) ──────────────────────────────────────
+  # Started with:  docker compose --profile tls up -d
+  # Caddy fetches a Let's Encrypt certificate for KEYWAVE_DOMAIN automatically
+  # and reverse-proxies (WebSockets included) to the app. Requires a domain whose
+  # DNS A/AAAA record points at this host, and ports 80 + 443 open. Skip this
+  # profile if you already run your own reverse proxy (Nginx Proxy Manager, etc.)
+  # — point that at http://keywave:5000 with WebSocket upgrade enabled instead.
+  caddy:
+    image: caddy:2-alpine
+    container_name: keywave-caddy
+    restart: unless-stopped
+    profiles: ["tls"]
+    depends_on: [keywave]
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    environment:
+      - KEYWAVE_DOMAIN=${KEYWAVE_DOMAIN:-}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  caddy_data:
+  caddy_config:

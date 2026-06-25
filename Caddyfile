@@ -1,0 +1,8 @@
+# Automatic HTTPS for Keywave. Used by the `tls` compose profile.
+# KEYWAVE_DOMAIN must resolve (DNS A/AAAA) to this host, with ports 80+443 open.
+# Caddy obtains and renews a Let's Encrypt certificate automatically and proxies
+# to the app (WebSocket upgrades are handled transparently).
+{$KEYWAVE_DOMAIN} {
+	encode zstd gzip
+	reverse_proxy keywave:5000
+}
