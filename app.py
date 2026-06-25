@@ -1,4 +1,4 @@
-import os, uuid, time, threading, mimetypes
+import os, uuid, time, threading, mimetypes, hmac, hashlib, base64, secrets
 from flask import Flask, request, Response, jsonify
 from flask_socketio import SocketIO, emit, join_room, leave_room
 
@@ -22,7 +22,73 @@ CREATE_MAX    = _env_int("KEYWAVE_CREATE_MAX", 10)      # max create_room / wind
 MSG_WINDOW    = _env_int("KEYWAVE_MSG_WINDOW", 10)
 MSG_MAX       = _env_int("KEYWAVE_MSG_MAX", 120)        # max relayed msgs / window / client
 MAX_PAYLOAD   = _env_int("KEYWAVE_MAX_PAYLOAD", 256 * 1024)  # bytes per relayed field
+GRACE_TTL     = _env_int("KEYWAVE_GRACE_TTL", 90)      # seconds a dropped peer's slot is held for reconnect
 ROOM_ID_LEN   = 10
+
+# ── ICE / NAT traversal (STUN + optional TURN) ───────────────────────────────
+# STUN alone cannot connect peers behind symmetric / carrier-grade NAT. For a
+# VPS deployment where the two browsers are on different real networks, a TURN
+# relay is what makes video reliably connect. Configure one of:
+#
+#   1. Bundled coturn (see docker-compose `turn` profile). Share a secret:
+#        KEYWAVE_TURN_HOST=turn.example.com   (public host clients can reach)
+#        KEYWAVE_TURN_SECRET=<same as coturn static-auth-secret>
+#      The server then mints short-lived TURN credentials per client.
+#   2. Any external TURN with static credentials:
+#        KEYWAVE_TURN_URL=turn:turn.example.com:3478
+#        KEYWAVE_TURN_USER=...  KEYWAVE_TURN_PASS=...
+#
+# Set KEYWAVE_FORCE_RELAY=1 to force all media through TURN (useful to verify
+# the relay works, or in environments where direct P2P must be disallowed).
+STUN_URLS    = [u.strip() for u in os.environ.get(
+    "KEYWAVE_STUN",
+    "stun:stun.l.google.com:19302,stun:stun1.l.google.com:19302",
+).split(",") if u.strip()]
+TURN_HOST    = os.environ.get("KEYWAVE_TURN_HOST", "").strip()
+TURN_SECRET  = os.environ.get("KEYWAVE_TURN_SECRET", "").strip()
+TURN_TTL     = _env_int("KEYWAVE_TURN_TTL", 86400)            # credential lifetime (s)
+TURN_URL     = os.environ.get("KEYWAVE_TURN_URL", "").strip()
+TURN_USER    = os.environ.get("KEYWAVE_TURN_USER", "").strip()
+TURN_PASS    = os.environ.get("KEYWAVE_TURN_PASS", "").strip()
+TURN_TLS     = os.environ.get("KEYWAVE_TURN_TLS", "").strip() in ("1", "true", "yes")
+FORCE_RELAY  = os.environ.get("KEYWAVE_FORCE_RELAY", "").strip() in ("1", "true", "yes")
+
+# Refuse to mint credentials against the shipped placeholder secret: it would be
+# guessable (open relay) and would not match a properly-configured coturn.
+_TURN_SECRET_PLACEHOLDER = "change-me-to-a-long-random-secret"
+TURN_SECRET_OK = bool(TURN_SECRET) and TURN_SECRET != _TURN_SECRET_PLACEHOLDER
+
+
+def _ice_config():
+    """Build the ICE server list. TURN credentials, when a shared secret is
+    configured, follow coturn's REST API (use-auth-secret): the username is
+    `<expiry-unix>:keywave` and the credential is base64(HMAC-SHA1(secret,
+    username)), so no per-user accounts need to exist on the TURN server."""
+    servers = [{"urls": STUN_URLS}] if STUN_URLS else []
+    if TURN_HOST and TURN_SECRET_OK:
+        expiry = int(time.time()) + TURN_TTL
+        username = "{}:keywave".format(expiry)
+        cred = base64.b64encode(
+            hmac.new(TURN_SECRET.encode(), username.encode(), hashlib.sha1).digest()
+        ).decode()
+        urls = [
+            "turn:{}:3478?transport=udp".format(TURN_HOST),
+            "turn:{}:3478?transport=tcp".format(TURN_HOST),
+        ]
+        # TURN over TLS on 443 escapes networks that allow only HTTPS egress.
+        if TURN_TLS:
+            urls.append("turns:{}:443?transport=tcp".format(TURN_HOST))
+        servers.append({"urls": urls, "username": username, "credential": cred})
+    elif TURN_URL:
+        entry = {"urls": [u.strip() for u in TURN_URL.split(",") if u.strip()]}
+        if TURN_USER:
+            entry["username"] = TURN_USER
+            entry["credential"] = TURN_PASS
+        servers.append(entry)
+    cfg = {"iceServers": servers}
+    if FORCE_RELAY:
+        cfg["iceTransportPolicy"] = "relay"
+    return cfg
 
 mimetypes.add_type("font/woff2", ".woff2")
 mimetypes.add_type("text/javascript", ".js")
@@ -35,11 +101,16 @@ socketio = SocketIO(
     cors_allowed_origins=ALLOWED_ORIGINS,
     async_mode="threading",
     max_http_buffer_size=MAX_PAYLOAD * 2,
-    ping_timeout=30,
+    # A longer ping timeout tolerates brief mobile backgrounding / radio handoffs
+    # without dropping the socket; the grace window below covers real reconnects.
+    ping_timeout=60,
     ping_interval=25,
 )
 
-# room_id -> {"peers": [sid, ...], "created": float}
+# room_id -> {"created": float, "slots": [slot, ...]}  (max 2 slots)
+#   slot = {"sid": str|None, "token": str, "initiator": bool, "gone_at": float|None}
+# A slot whose sid is None and gone_at is set is held (grace window) for a
+# reconnecting peer; the sweeper finalizes it after GRACE_TTL.
 rooms       = {}
 sid_to_room = {}
 _create_log = {}   # sid -> [timestamps]   (create_room rate limiting)
@@ -926,6 +997,7 @@ body::before {
         <button class="share-btn" onclick="UI.copyRoomId()">Copy ID</button>
       </div>
       <div class="share-hint dim">Use “Share…” for Signal, Session, Tox, Element and anything else installed. Peer-to-peer; the server never sees your messages or keys.</div>
+      <div class="share-hint" id="turn-hint" style="display:none;color:var(--warn)">⚠ Direct-only mode (no TURN relay configured). Calls between different networks may fail to connect — see the deploy docs to enable TURN.</div>
     </div>
 
     <button class="btn" style="border-color:var(--text-lo);color:var(--text)" onclick="UI.goHome()">Cancel</button>
@@ -1055,6 +1127,13 @@ const S = {
   audioMuted:    false,
   videoOff:      false,
   insertableStreams: false,
+  iceConfig:     null,   // { iceServers, iceTransportPolicy } fetched from /config
+  iceRestarting: false,  // guard against overlapping ICE restarts
+  iceRestartAttempts: 0, // bounded-retry counter for ICE restarts
+  iceRestartTimer: null, // recovery timer if a restart answer never arrives
+  disconnectTimer: null, // nudge timer for the 'disconnected' state
+  pendingIce:    [],     // ICE candidates buffered until remoteDescription is set
+  sessionToken:  null,   // per-session token used to rejoin after a reconnect
   peerFenc:      false,  // peer advertised Insertable Streams support
   frameEncActive: false, // per-frame E2E enabled (both peers support it)
   sas:           null,   // Uint8Array — safety number (MITM check)
@@ -1080,6 +1159,10 @@ const Crypto = {
 
     S.insertableStreams = (typeof RTCRtpSender !== 'undefined' &&
       typeof RTCRtpSender.prototype.createEncodedStreams === 'function');
+
+    // Warm the ICE config (STUN + optional TURN) from the server so it is ready
+    // for the waiting-screen status; it is refreshed again at call setup.
+    await Ice.refresh();
 
     toast('Crypto ready · ECDH P-256 keypair generated', 'ok');
   },
@@ -1186,7 +1269,9 @@ const Crypto = {
       );
       return TD.decode(pt);
     } catch {
-      return '[⚠ AUTHENTICATION FAILED]';
+      // Authentication failed — signal the caller so it can drop the message
+      // without rendering it as peer content or advancing the sequence window.
+      return null;
     }
   },
 };
@@ -1238,6 +1323,7 @@ const VideoE2E = {
   },
   _pipeRecv(readable, writable, kind) {
     const key = kind === 'audio' ? S.audioDecKey : S.videoDecKey;
+    let ok = 0, fail = 0, warned = false;
     readable.pipeThrough(new TransformStream({
       async transform(frame, ctrl) {
         try {
@@ -1246,7 +1332,21 @@ const VideoE2E = {
           const dec = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: d.slice(0,12) }, key, d.slice(12));
           frame.data = dec;
           ctrl.enqueue(frame);
-        } catch {}
+          ok++;
+        } catch (e) {
+          // Undecryptable frames must be dropped (enqueuing garbage corrupts the
+          // decoder), but a persistent failure means a key/mode mismatch — make
+          // it diagnosable instead of a silently black call.
+          fail++;
+          if (!warned && fail === 1) console.warn('[frame] ' + kind + ' decrypt failed', e);
+          if (!warned && ok === 0 && fail >= 30) {
+            warned = true;
+            try {
+              Chat.sysMsg('Media frame decryption is failing (' + kind + ') — the call may be black. Ensure both peers run the same build.', 'error');
+              setMediaBadge(false);
+            } catch (_) {}
+          }
+        }
       }
     })).pipeTo(writable);
   },
@@ -1263,19 +1363,53 @@ function setMediaBadge(active) {
 }
 
 /* ══════════════════════════════════════════════════════════
+   ICE CONFIG  (env-driven STUN/TURN, refreshed at call setup)
+══════════════════════════════════════════════════════════ */
+const Ice = {
+  // Minted TURN credentials are short-lived, so refetch /config right before a
+  // connection is (re)built rather than relying on the snapshot taken at boot.
+  async refresh() {
+    try {
+      const r = await fetch('/config', { cache: 'no-store' });
+      if (r.ok) {
+        const c = await r.json();
+        if (c && Array.isArray(c.iceServers) && c.iceServers.length) S.iceConfig = c;
+      }
+    } catch (e) { /* keep the previous/boot config */ }
+  },
+  hasTurn() {
+    const list = (S.iceConfig && S.iceConfig.iceServers) || [];
+    return list.some(s => {
+      const u = s.urls;
+      const arr = Array.isArray(u) ? u : [u];
+      return arr.some(x => typeof x === 'string' && /^turns?:/.test(x));
+    });
+  },
+};
+
+/* ══════════════════════════════════════════════════════════
    WEBRTC
 ══════════════════════════════════════════════════════════ */
 const WebRTC = {
   createPC() {
+    // ICE servers come from /config (env-driven TURN); fall back to public STUN
+    // if the fetch failed. max-bundle / require keep the candidate footprint
+    // small, which connects more reliably through restrictive NAT/firewalls.
+    const ice = (S.iceConfig && S.iceConfig.iceServers) || [
+      { urls: ['stun:stun.l.google.com:19302', 'stun:stun1.l.google.com:19302'] },
+    ];
     const cfg = {
-      iceServers: [
-        { urls: 'stun:stun.l.google.com:19302' },
-        { urls: 'stun:stun1.l.google.com:19302' },
-      ],
+      iceServers: ice,
+      bundlePolicy: 'max-bundle',
+      rtcpMuxPolicy: 'require',
+      iceCandidatePoolSize: 1,
       // Only enable encoded transforms when BOTH peers support them, so a
       // mixed-browser call falls back cleanly to DTLS-SRTP instead of breaking.
       ...(S.frameEncActive ? { encodedInsertableStreams: true } : {}),
     };
+    if (S.iceConfig && S.iceConfig.iceTransportPolicy) cfg.iceTransportPolicy = S.iceConfig.iceTransportPolicy;
+    S.iceRestarting = false;
+    S.pendingIce = [];   // candidates buffered until this PC has a remote description
     S.pc = new RTCPeerConnection(cfg);
     S.localStream.getTracks().forEach(track => {
       const sender = S.pc.addTrack(track, S.localStream);
@@ -1293,11 +1427,75 @@ const WebRTC = {
     };
     S.pc.onicecandidate = (e) => { if (e.candidate) S.socket.emit('ice', { candidate: e.candidate }); };
     S.pc.onconnectionstatechange = () => {
+      if (!S.pc) return;
       const state = S.pc.connectionState;
       Status.setPeer(state);
-      if (state === 'connected') { Chat.sysMsg('Peer-to-peer connection established', 'ok'); toast('P2P connected', 'ok'); }
-      else if (state === 'disconnected' || state === 'failed') { Status.setVideo(false); Chat.sysMsg('Peer disconnected', 'warn'); }
+      if (state === 'connected') {
+        // Path is confirmed good: clear all recovery state.
+        S.iceRestartAttempts = 0; S.iceRestarting = false;
+        clearTimeout(S.iceRestartTimer); clearTimeout(S.disconnectTimer);
+        Chat.sysMsg('Peer-to-peer connection established', 'ok'); toast('P2P connected', 'ok');
+      } else if (state === 'disconnected') {
+        // Often transient; give it a moment, then nudge a restart if still down.
+        Status.setVideo(false); Chat.sysMsg('Peer connection unstable — recovering…', 'warn');
+        clearTimeout(S.disconnectTimer);
+        S.disconnectTimer = setTimeout(() => {
+          if (S.pc && (S.pc.connectionState === 'disconnected' || S.pc.connectionState === 'failed')) this.restartIce();
+        }, 5000);
+      } else if (state === 'failed') {
+        Status.setVideo(false); this.restartIce();
+      }
     };
+    S.pc.oniceconnectionstatechange = () => {
+      // 'failed' here means ICE could not find (or lost) a working path.
+      if (S.pc && S.pc.iceConnectionState === 'failed') this.restartIce();
+    };
+  },
+  // Recover from a broken/failed media path. Only the initiator re-offers (no
+  // glare); the answerer asks the initiator to do it via a relayed signal.
+  restartIce() {
+    if (!S.pc) return;
+    if (!S.isInitiator) {
+      if (S.iceRestarting) return;
+      S.iceRestarting = true;
+      try { S.socket.emit('want_restart', {}); } catch (e) {}
+      clearTimeout(S.iceRestartTimer);
+      // Un-latch so a later failure can re-request if this one goes unanswered.
+      S.iceRestartTimer = setTimeout(() => { S.iceRestarting = false; }, 8000);
+      return;
+    }
+    if (S.iceRestarting) return;
+    if (S.iceRestartAttempts >= 5) {
+      Chat.sysMsg('Could not recover the connection — please hang up and rejoin', 'error');
+      return;
+    }
+    S.iceRestarting = true;
+    S.iceRestartAttempts++;
+    this._doRestart();
+  },
+  async _doRestart() {
+    try {
+      await Ice.refresh();   // mint fresh (possibly short-lived) TURN credentials
+      if (S.iceConfig && S.iceConfig.iceServers && S.pc.setConfiguration) {
+        try {
+          S.pc.setConfiguration({
+            iceServers: S.iceConfig.iceServers,
+            bundlePolicy: 'max-bundle', rtcpMuxPolicy: 'require',
+            ...(S.iceConfig.iceTransportPolicy ? { iceTransportPolicy: S.iceConfig.iceTransportPolicy } : {}),
+          });
+        } catch (e) {}
+      }
+      const offer = await S.pc.createOffer({ iceRestart: true });
+      await S.pc.setLocalDescription(offer);
+      S.socket.emit('offer', { sdp: offer });
+      Chat.sysMsg('Renegotiating connection…', 'warn');
+      // If no answer lands and we don't reach 'connected', un-latch and retry.
+      clearTimeout(S.iceRestartTimer);
+      S.iceRestartTimer = setTimeout(() => {
+        S.iceRestarting = false;
+        if (S.pc && S.pc.connectionState !== 'connected') this.restartIce();
+      }, 8000);
+    } catch (e) { S.iceRestarting = false; }
   },
   async _tuneVideo(track, sender) {
     try { track.contentHint = 'motion'; } catch (e) {}
@@ -1311,20 +1509,48 @@ const WebRTC = {
     } catch (e) { /* some browsers reject setParameters before negotiation */ }
   },
   async makeOffer() {
+    await Ice.refresh();
     this.createPC();
     const offer = await S.pc.createOffer();
     await S.pc.setLocalDescription(offer);
     S.socket.emit('offer', { sdp: offer });
   },
   async handleOffer(sdp) {
-    this.createPC();
+    // A second offer on an existing, live connection is an ICE-restart
+    // renegotiation from the peer — reuse the current PC instead of tearing
+    // media down. Only build a fresh PC if there is none or it is dead.
+    const dead = !S.pc || ['closed', 'failed'].includes(S.pc.connectionState);
+    if (dead) { await Ice.refresh(); this.createPC(); }
     await S.pc.setRemoteDescription(new RTCSessionDescription(sdp));
+    await this._drainIce();
     const answer = await S.pc.createAnswer();
     await S.pc.setLocalDescription(answer);
     S.socket.emit('answer', { sdp: answer });
   },
-  async handleAnswer(sdp) { await S.pc.setRemoteDescription(new RTCSessionDescription(sdp)); },
-  async handleIce(c) { try { await S.pc.addIceCandidate(new RTCIceCandidate(c)); } catch {} },
+  async handleAnswer(sdp) {
+    if (!S.pc) return;
+    await S.pc.setRemoteDescription(new RTCSessionDescription(sdp));
+    await this._drainIce();
+    S.iceRestarting = false;
+    clearTimeout(S.iceRestartTimer);
+  },
+  // Buffer ICE candidates that arrive before the remote description is set
+  // (common with trickle ICE) so they are never silently dropped.
+  async handleIce(c) {
+    if (!S.pc || !S.pc.remoteDescription || !S.pc.remoteDescription.type) {
+      (S.pendingIce || (S.pendingIce = [])).push(c);
+      return;
+    }
+    try { await S.pc.addIceCandidate(new RTCIceCandidate(c)); }
+    catch (e) { console.warn('[ice] addIceCandidate failed', e); }
+  },
+  async _drainIce() {
+    const q = S.pendingIce || []; S.pendingIce = [];
+    for (const c of q) {
+      try { await S.pc.addIceCandidate(new RTCIceCandidate(c)); }
+      catch (e) { console.warn('[ice] queued addIceCandidate failed', e); }
+    }
+  },
 };
 
 /* ══════════════════════════════════════════════════════════
@@ -1544,15 +1770,47 @@ const Signaling = {
   connect() {
     S.socket = io();
 
-    S.socket.on('room_created', ({ room_id }) => { S.roomId = room_id; UI.showWaiting(room_id); });
+    S.socket.on('room_created', ({ room_id, token }) => {
+      S.roomId = room_id; S.sessionToken = token || null;
+      UI.showWaiting(room_id);
+    });
 
-    S.socket.on('joined', async ({ room_id, initiator }) => {
+    S.socket.on('joined', async ({ room_id, initiator, token }) => {
       S.roomId = room_id;
+      S.sessionToken = token || null;
       S.isInitiator = initiator;
       if (initiator) await this._startSession();
     });
 
     S.socket.on('peer_arrived', async () => { await this._startSession(); });
+
+    // socket.io fires 'connect' on the initial connection AND on every
+    // reconnect. On a reconnect (we already hold a room+token) rebind to the
+    // existing room so a transient network blip does not kill the call.
+    S.socket.on('connect', () => {
+      if (S.roomId && S.sessionToken) S.socket.emit('rejoin', { room_id: S.roomId, token: S.sessionToken });
+    });
+
+    S.socket.on('rejoined', ({ initiator }) => {
+      S.isInitiator = !!initiator;
+      toast('Reconnected', 'ok');
+      Chat.sysMsg('Reconnected to the room', 'ok');
+      // Refresh the media path; only the initiator actually re-offers.
+      if (S.isInitiator) WebRTC.restartIce();
+    });
+
+    S.socket.on('peer_rejoined', () => {
+      Chat.sysMsg('Peer reconnected', 'ok');
+      if (S.isInitiator) WebRTC.restartIce();
+    });
+
+    S.socket.on('session_expired', () => {
+      toast('Session expired — start a new room', 'error');
+      Chat.sysMsg('Session expired (the peer did not return in time)', 'error');
+      S.sessionToken = null;
+    });
+
+    S.socket.on('want_restart', () => { if (S.isInitiator) WebRTC.restartIce(); });
 
     S.socket.on('pubkey', async ({ pubkey, fenc }) => {
       try {
@@ -1574,30 +1832,53 @@ const Signaling = {
 
     S.socket.on('msg', async ({ ct, nonce, ts, seq }) => {
       if (!S.keysReady) return;
-      // Reject replays and reordering: sequence must strictly increase.
+      // Cheap replay/reorder drop. Authoritative advance happens only AFTER
+      // authentication so a forged high-seq frame can't censor real messages.
       if (typeof seq !== 'number' || seq <= S.rxSeq) return;
-      S.rxSeq = seq;
       const text = await Crypto.decryptMsg(ct, nonce, seq, ts);
+      if (text === null) { Chat.sysMsg('Dropped an unauthenticated message', 'error'); return; }
+      S.rxSeq = seq;
       Chat.appendMsg(text, 'remote', ts || Date.now());
     });
 
     S.socket.on('peer_left', () => {
       Status.setPeer('disconnected');
-      toast('Peer disconnected', 'warn');
+      toast('Peer left', 'warn');
       Chat.sysMsg('Peer left the session', 'warn');
       Status.setVideo(false);
+      // Real teardown so any later rejoin/new peer starts from a clean slate
+      // (no zombie PeerConnection, no stale candidate queue or crypto state).
+      if (S.pc) { try { S.pc.close(); } catch (e) {} S.pc = null; }
+      clearTimeout(S.iceRestartTimer); clearTimeout(S.disconnectTimer);
+      S.iceRestarting = false; S.iceRestartAttempts = 0; S.pendingIce = [];
+      const rv = document.getElementById('remote-video');
+      if (rv) rv.srcObject = null;
+      document.getElementById('video-overlay')?.classList.remove('hidden');
+      S.keysReady = false; S.txSeq = 0; S.rxSeq = 0;
       S.verified = false;
       Verify.setState(false);
+      setMediaBadge(false);
     });
 
     S.socket.on('error', ({ msg }) => toast(msg, 'error'));
-    S.socket.on('disconnect', () => toast('Disconnected from server', 'error'));
+    // Auto-reconnect is on; keep the user informed without declaring the call dead.
+    S.socket.on('disconnect', () => { Status.setPeer('connecting'); toast('Connection lost — reconnecting…', 'warn'); });
   },
 
   async _startSession() {
     UI.showSession();
     document.getElementById('header-room-id').textContent = S.roomId;
-    await Media.start();
+    const haveMedia = await Media.start();
+    if (!haveMedia) {
+      // No camera AND no microphone — do not advance signaling into a
+      // track-less "connected" call that just looks broken.
+      Chat.sysMsg('No camera or microphone available — cannot start the call. Grant access and rejoin.', 'error');
+      Status.setPeer('failed');
+      return;
+    }
+    if (S.localStream && S.localStream.getVideoTracks().length === 0) {
+      Chat.sysMsg('Camera unavailable — joined audio-only. Grant camera access and rejoin to enable video.', 'warn');
+    }
     Status.setPeer('connecting');
     Chat.sysMsg('Room: ' + S.roomId + ' · Share this ID with your peer');
     Chat.sysMsg('Secure channel establishing…');
@@ -1626,12 +1907,16 @@ const UI = {
     if (link) link.value = Share.link();
     const nb = document.getElementById('share-native-btn');
     if (nb) nb.style.display = (typeof navigator.share === 'function') ? '' : 'none';
+    const th = document.getElementById('turn-hint');
+    if (th) th.style.display = Ice.hasTurn() ? 'none' : '';
   },
   showSession() { show('screen-session'); },
-  goHome()      { show('screen-landing'); S.roomId = null; },
+  goHome()      { show('screen-landing'); S.roomId = null; S.sessionToken = null; },
   hangup() {
     Media.stop();
     if (S.pc) { S.pc.close(); S.pc = null; }
+    clearTimeout(S.iceRestartTimer); clearTimeout(S.disconnectTimer);
+    S.iceRestarting = false; S.iceRestartAttempts = 0; S.pendingIce = [];
     S.chatEncKey = null; S.chatDecKey = null;
     S.videoEncKey = null; S.videoDecKey = null;
     S.audioEncKey = null; S.audioDecKey = null;
@@ -1640,7 +1925,7 @@ const UI = {
     S.sas = null; S.verified = false;
     S.peerFenc = false; S.frameEncActive = false;
     S.txSeq = 0; S.rxSeq = 0;
-    S.roomId = null;
+    S.roomId = null; S.sessionToken = null;
     const vb = document.getElementById('verify-btn');
     if (vb) vb.disabled = true;
     Verify.setState(false);
@@ -1720,11 +2005,17 @@ function toast(msg, type = '') {
 </script>
 </body>"""
 
+def _slot_by_sid(r, sid):
+    return next((s for s in r["slots"] if s["sid"] == sid), None)
+
+def _active_sids(r):
+    return [s["sid"] for s in r["slots"] if s["sid"] is not None]
+
 def peer_sid(room_id, my_sid):
     r = rooms.get(room_id)
     if not r:
         return None
-    return next((s for s in r["peers"] if s != my_sid), None)
+    return next((s["sid"] for s in r["slots"] if s["sid"] and s["sid"] != my_sid), None)
 
 def relay(event, data):
     sid = request.sid
@@ -1765,6 +2056,14 @@ def healthz():
         n = len(rooms)
     return jsonify(status="ok", rooms=n)
 
+@app.route("/config")
+def config():
+    # ICE servers (STUN + optional TURN) for the client. TURN credentials, when
+    # minted from a shared secret, are short-lived, so this must not be cached.
+    resp = jsonify(_ice_config())
+    resp.headers["Cache-Control"] = "no-store"
+    return resp
+
 # ── Signaling ─────────────────────────────────────────────────────────────────
 @socketio.on("create_room")
 def on_create_room():
@@ -1778,9 +2077,8 @@ def on_create_room():
         prev = sid_to_room.get(sid)
         if prev and prev in rooms:
             pr = rooms[prev]
-            if sid in pr["peers"]:
-                pr["peers"].remove(sid)
-            if not pr["peers"]:
+            pr["slots"] = [s for s in pr["slots"] if s["sid"] != sid]
+            if not pr["slots"]:
                 rooms.pop(prev, None)
         if len(rooms) >= MAX_ROOMS:
             emit("error", {"msg": "Server is at capacity. Try again later."})
@@ -1788,10 +2086,12 @@ def on_create_room():
         room_id = uuid.uuid4().hex[:ROOM_ID_LEN].upper()
         while room_id in rooms:
             room_id = uuid.uuid4().hex[:ROOM_ID_LEN].upper()
-        rooms[room_id] = {"peers": [sid], "created": time.time()}
+        token = secrets.token_urlsafe(18)
+        rooms[room_id] = {"created": time.time(),
+                          "slots": [{"sid": sid, "token": token, "initiator": False, "gone_at": None}]}
         sid_to_room[sid] = room_id
     join_room(room_id)
-    emit("room_created", {"room_id": room_id})
+    emit("room_created", {"room_id": room_id, "token": token})
 
 @socketio.on("join")
 def on_join(data):
@@ -1805,19 +2105,58 @@ def on_join(data):
         if not r:
             emit("error", {"msg": "Room not found."})
             return
-        if sid in r["peers"]:
+        if _slot_by_sid(r, sid):
             return
-        if len(r["peers"]) >= 2:
+        active = _active_sids(r)
+        if len(active) >= 2:
             emit("error", {"msg": "Room is full (max 2 peers)."})
             return
-        r["peers"].append(sid)
+        # Drop any stale (empty, never-graced) slots, then take the second slot.
+        r["slots"] = [s for s in r["slots"] if s["sid"] is not None or s["gone_at"]]
+        token = secrets.token_urlsafe(18)
+        is_initiator = len(active) == 1
+        r["slots"].append({"sid": sid, "token": token, "initiator": is_initiator, "gone_at": None})
         sid_to_room[sid] = room_id
-        peer0 = r["peers"][0]
-        is_initiator = len(r["peers"]) == 2
+        peer0 = active[0] if active else None
     join_room(room_id)
-    emit("joined", {"room_id": room_id, "initiator": is_initiator})
-    if is_initiator:
+    emit("joined", {"room_id": room_id, "initiator": is_initiator, "token": token})
+    if is_initiator and peer0:
         socketio.emit("peer_arrived", {}, to=peer0)
+
+@socketio.on("rejoin")
+def on_rejoin(data):
+    # Rebind a reconnected socket (new request.sid) to its existing room slot,
+    # proven by the per-session token, so a transient drop does not end the call.
+    sid = request.sid
+    data = data or {}
+    room_id = str(data.get("room_id", "")).strip().upper()
+    token = data.get("token")
+    if not _valid_room_id(room_id) or not isinstance(token, str):
+        emit("session_expired", {})
+        return
+    with _lock:
+        r = rooms.get(room_id)
+        slot = next((s for s in r["slots"] if s["token"] == token), None) if r else None
+        if not slot:
+            emit("session_expired", {})
+            return
+        old = slot["sid"]
+        if old and old != sid:
+            sid_to_room.pop(old, None)
+        slot["sid"] = sid
+        slot["gone_at"] = None
+        sid_to_room[sid] = room_id
+        initiator = slot["initiator"]
+        other = next((s["sid"] for s in r["slots"] if s is not slot and s["sid"]), None)
+    join_room(room_id)
+    emit("rejoined", {"room_id": room_id, "initiator": initiator})
+    if other:
+        socketio.emit("peer_rejoined", {}, to=other)
+
+@socketio.on("want_restart")
+def on_want_restart(data=None):
+    # The non-initiator observed a failed path; ask the initiator to re-offer.
+    relay("want_restart", {})
 
 @socketio.on("pubkey")
 def on_pubkey(data):
@@ -1873,30 +2212,61 @@ def on_disconnect(reason=None):
         r = rooms.get(room_id)
         if not r:
             return
-        if sid in r["peers"]:
-            r["peers"].remove(sid)
-        remaining = r["peers"][0] if r["peers"] else None
-        if not r["peers"]:
-            rooms.pop(room_id, None)
-    if remaining:
-        socketio.emit("peer_left", {}, to=remaining)
+        slot = _slot_by_sid(r, sid)
+        if slot:
+            # Hold the slot open for a grace window instead of ending the call;
+            # a reconnect (rejoin) within GRACE_TTL restores it. The peer is NOT
+            # told the call ended yet — the sweeper finalizes if no one returns.
+            slot["sid"] = None
+            slot["gone_at"] = time.time()
+
+def _reap_once(now):
+    """One sweep: finalize graced (dropped-but-held) slots past GRACE_TTL and
+    reap abandoned/half-open rooms. Returns sids to notify with peer_left."""
+    notify_left = []
+    with _lock:
+        for rid in list(rooms.keys()):
+            r = rooms[rid]
+            # Finalize slots whose grace window has expired.
+            for s in list(r["slots"]):
+                if s["sid"] is None and s["gone_at"] and now - s["gone_at"] > GRACE_TTL:
+                    r["slots"].remove(s)
+                    other = next((x["sid"] for x in r["slots"] if x["sid"]), None)
+                    if other:
+                        notify_left.append(other)
+            active = _active_sids(r)
+            graced = [s for s in r["slots"] if s["sid"] is None and s["gone_at"]]
+            if not r["slots"]:
+                rooms.pop(rid, None)
+            elif not active and not graced:
+                # No live and no held peers — nothing to wait for.
+                rooms.pop(rid, None)
+            elif len(r["slots"]) < 2 and not graced and now - r["created"] > ROOM_TTL:
+                # Half-open room that never got a second peer.
+                for s in r["slots"]:
+                    if s["sid"]:
+                        sid_to_room.pop(s["sid"], None)
+                rooms.pop(rid, None)
+    return notify_left
 
 def _sweeper():
-    """Reap abandoned half-open rooms so the maps cannot grow without bound."""
+    """Background reaper: finalize grace windows and abandoned rooms."""
     while True:
-        socketio.sleep(60)
-        now = time.time()
-        with _lock:
-            stale = [rid for rid, r in rooms.items()
-                     if len(r["peers"]) < 2 and now - r["created"] > ROOM_TTL]
-            for rid in stale:
-                for s in rooms[rid]["peers"]:
-                    sid_to_room.pop(s, None)
-                rooms.pop(rid, None)
+        socketio.sleep(15)
+        for target in _reap_once(time.time()):
+            socketio.emit("peer_left", {}, to=target)
 
 if __name__ == "__main__":
     socketio.start_background_task(_sweeper)
     print(f"[keywave] Running on http://0.0.0.0:{PORT}", flush=True)
+    if not ((TURN_HOST and TURN_SECRET_OK) or TURN_URL):
+        print("[keywave] WARNING: no TURN relay configured — only STUN is in use. "
+              "Cross-network calls (mobile / CGNAT / strict firewalls) will often "
+              "fail to connect. Set KEYWAVE_TURN_HOST + KEYWAVE_TURN_SECRET (bundled "
+              "coturn) or KEYWAVE_TURN_URL to enable a relay.", flush=True)
+    elif TURN_HOST and TURN_SECRET and not TURN_SECRET_OK:
+        print("[keywave] WARNING: KEYWAVE_TURN_SECRET is the placeholder value — "
+              "TURN is DISABLED. Set a real random secret.", flush=True)
     # NOTE: this uses the Werkzeug dev server (allow_unsafe_werkzeug). It is fine
     # behind a TLS-terminating reverse proxy (Nginx Proxy Manager). For a heavier
     # deployment, run under gunicorn with a gevent-websocket worker instead.

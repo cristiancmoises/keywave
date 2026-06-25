@@ -7,8 +7,16 @@ services:
       - "0.0.0.0:5128:5000"
     environment:
       - PYTHONUNBUFFERED=1
-      # Lock CORS to your real origin in production, e.g.:
-      # - KEYWAVE_ALLOWED_ORIGINS=https://keywave.example.com
+      # Lock CORS to your real origin in production:
+      - KEYWAVE_ALLOWED_ORIGINS=${KEYWAVE_ALLOWED_ORIGINS:-*}
+      # ── TURN (makes video connect across NAT / mobile networks) ────────────
+      # Set these in a .env file next to this compose file (see .env.example),
+      # then start with:   docker compose --profile turn up -d --build
+      # The SAME .env value reaches both the app and coturn, so credentials match.
+      - KEYWAVE_TURN_HOST=${KEYWAVE_TURN_HOST:-}
+      - KEYWAVE_TURN_SECRET=${KEYWAVE_TURN_SECRET:-}
+      - KEYWAVE_TURN_TLS=${KEYWAVE_TURN_TLS:-}
+      - KEYWAVE_FORCE_RELAY=${KEYWAVE_FORCE_RELAY:-}
     read_only: true
     tmpfs:
       - /tmp
@@ -29,6 +37,40 @@ services:
       options:
         max-size: "10m"
         max-file: "3"
+
+  # ── Bundled TURN relay (opt-in) ────────────────────────────────────────────
+  # Started only with:  docker compose --profile turn up -d
+  # coturn needs the host's network to relay UDP, so it uses host networking and
+  # the public IP directly. Open UDP/TCP 3478 and UDP 49160-49200 in your
+  # firewall / cloud security group. KEYWAVE_TURN_SECRET (from .env) is shared
+  # with the app so minted credentials validate; it is REQUIRED — the container
+  # refuses to start without it. On a 1:1-NAT cloud VPS (AWS/GCP/Oracle), set
+  # KEYWAVE_TURN_EXTERNAL_IP to the public IP (or <public>/<private>) or relay
+  # candidates advertise an unroutable private address and media silently fails.
+  coturn:
+    image: coturn/coturn:4.6
+    container_name: keywave-turn
+    restart: unless-stopped
+    profiles: ["turn"]
+    network_mode: host
+    environment:
+      # Soft default here so the non-turn `docker compose up` still parses; the
+      # container shell below hard-requires it at start (so coturn under the
+      # turn profile refuses to run without a real secret).
+      - KEYWAVE_TURN_SECRET=${KEYWAVE_TURN_SECRET:-}
+      - KEYWAVE_TURN_EXTERNAL_IP=${KEYWAVE_TURN_EXTERNAL_IP:-}
+    # Use a shell so the secret is required (:?) and --external-ip is included
+    # only when set (:+). $$ defers expansion to the container's shell.
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - >
+        exec turnserver -n --no-cli --no-tls --no-dtls --fingerprint
+        --use-auth-secret
+        --static-auth-secret="$${KEYWAVE_TURN_SECRET:?set KEYWAVE_TURN_SECRET}"
+        --realm=keywave --listening-port=3478
+        --min-port=49160 --max-port=49200
+        --no-multicast-peers --no-loopback-peers
+        $${KEYWAVE_TURN_EXTERNAL_IP:+--external-ip="$${KEYWAVE_TURN_EXTERNAL_IP}"}
 
 # ── Optional: put behind your existing Nginx Proxy Manager ───────────────────
 # Point NPM at http://keywave:5000 with WebSocket support enabled.

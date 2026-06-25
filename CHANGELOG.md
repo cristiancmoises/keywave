@@ -4,6 +4,61 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project aims to
 follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.4.0] - 2026-06-25
+
+Make calls actually connect (and stay connected) across real networks. This
+release closes the gap that made video work on `localhost` but not on a VPS,
+following a multi-agent audit of the signaling, media, and deploy paths.
+
+### Added
+- TURN relay support so calls connect across NAT / carrier-grade NAT / mobile
+  networks. ICE servers are served from `GET /config` and configured purely via
+  env: a bundled coturn (opt-in `turn` compose profile) with per-client
+  short-lived credentials minted via coturn's `use-auth-secret` scheme, or any
+  external TURN with static credentials. `KEYWAVE_FORCE_RELAY=1` forces media
+  through TURN to verify the relay.
+- Reconnection recovery: a per-session token plus a `rejoin` flow with a grace
+  window (`KEYWAVE_GRACE_TTL`, default 90s). A dropped WebSocket now reconnects
+  and rebinds to its room instead of silently ending the call; the peer is told
+  only if no one returns within the window.
+- ICE restart with bounded retries/back-off, and a relayed `want_restart` signal
+  so an answerer that loses its path can ask the initiator to renegotiate
+  (previously only the initiator could recover, and only from a symmetric fail).
+- `.env.example` for a one-file, all-in-one deploy; the same value configures
+  both the app and the bundled coturn.
+- Startup warning and a waiting-screen banner when no TURN is configured
+  (STUN-only is localhost/LAN-only).
+
+### Fixed
+- Trickle ICE candidates that arrived before the remote description was set were
+  silently dropped (empty `catch`), thinning the candidate set and breaking
+  cross-NAT connects. They are now queued and drained after `setRemoteDescription`.
+- Chat: the replay/reorder watermark advanced *before* authentication, so a
+  single forged high-sequence message could permanently censor all real chat.
+  The sequence now advances only after successful AES-GCM authentication, and an
+  unauthenticated frame is dropped with a warning instead of rendered as peer text.
+- `peer_left` now fully tears down the peer connection (no zombie PC / stale
+  candidate queue) so a later rejoin or new peer starts clean.
+- coturn now refuses to start with a missing/placeholder secret, and the app
+  will not mint credentials against the placeholder (prevents an open relay and
+  credential mismatches).
+- A track-less session (camera and mic both denied) no longer advances signaling
+  into a broken "connected" call; audio-only is surfaced clearly.
+
+### Changed
+- Peer connection uses `max-bundle` / `require` and a small candidate pool, which
+  connects more reliably through restrictive NAT and firewalls.
+- TURN credentials are refreshed from `/config` at call setup and before an ICE
+  restart, so long-open tabs / reconnects don't use expired credentials.
+- A renegotiation offer reuses the existing peer connection instead of tearing
+  media down; ICE servers can carry a `turns:` (TLS/443) entry via
+  `KEYWAVE_TURN_TLS` for HTTPS-only egress.
+- `coturn --external-ip` is env-driven (`KEYWAVE_TURN_EXTERNAL_IP`) so relay
+  candidates are routable on 1:1-NAT clouds; socket ping timeout raised to
+  tolerate brief mobile backgrounding.
+- Persistent media-frame decryption failures now surface a warning and flip the
+  encryption badge instead of producing a silently black call.
+
 ## [1.3.0] - 2026-06-24
 
 Stronger media encryption, clearer verification, and better video.

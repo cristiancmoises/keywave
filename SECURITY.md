@@ -54,7 +54,10 @@ Each message is encrypted with AES-256-GCM using a fresh random 96-bit IV. The
 message sequence number and timestamp are bound as additional authenticated data
 (AAD), so they cannot be altered without failing authentication. The receiver
 rejects any message whose sequence number is not strictly increasing, which
-gives replay and reorder detection.
+gives replay and reorder detection. The sequence watermark advances **only after
+a message authenticates**: an unauthenticated or forged frame (for example one
+injected by a malicious relay with an inflated sequence number) is dropped and
+cannot advance the watermark, so it cannot censor subsequent genuine messages.
 
 ### Audio and video
 
@@ -106,7 +109,10 @@ number.
   ultimately trust whoever operates the origin.
 - **Room IDs are bearer capabilities.** Anyone who has a room ID can take one of
   the two slots. The safety number defeats a racing attacker (their code will
-  not match), and rooms hold at most two peers.
+  not match), and rooms hold at most two peers. Reconnecting to an existing slot
+  after a network drop requires a high-entropy per-session token (issued only to
+  that peer over its own connection), so a third party who learns the short room
+  ID cannot hijack a held slot during the reconnect grace window.
 - **Verification is manual.** If users skip the safety-number comparison, a
   relay-level MITM is not automatically detected. The app surfaces an unverified
   state but does not block media, because the call itself is needed to compare.
@@ -117,8 +123,11 @@ number.
 - **No in-session ratchet.** Keys are ephemeral per session and discarded on
   hangup, which gives forward secrecy across sessions; there is no key rotation
   within a single session (sessions are short-lived).
-- **No bundled TURN.** Only public STUN is used, so calls across symmetric NAT
-  or carrier-grade NAT may fail until you add a TURN relay.
+- **TURN is optional and self-hosted.** By default only public STUN is used, so
+  calls across symmetric or carrier-grade NAT may fail until TURN is enabled
+  (bundled coturn, or an external relay via env). A TURN relay only forwards
+  encrypted media; with per-frame encryption active it cannot read call content,
+  and even on the DTLS-SRTP path the relay sees only ciphertext.
 
 ## Server hardening
 
