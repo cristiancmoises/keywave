@@ -1133,6 +1133,7 @@ const S = {
   iceRestartTimer: null, // recovery timer if a restart answer never arrives
   disconnectTimer: null, // nudge timer for the 'disconnected' state
   pendingIce:    [],     // ICE candidates buffered until remoteDescription is set
+  mediaReady:    null,   // Promise<boolean> — resolves when getUserMedia settles
   sessionToken:  null,   // per-session token used to rejoin after a reconnect
   peerFenc:      false,  // peer advertised Insertable Streams support
   frameEncActive: false, // per-frame E2E enabled (both peers support it)
@@ -1402,7 +1403,9 @@ const WebRTC = {
       iceServers: ice,
       bundlePolicy: 'max-bundle',
       rtcpMuxPolicy: 'require',
-      iceCandidatePoolSize: 1,
+      // NB: no iceCandidatePoolSize — a non-zero pool makes the offerer embed
+      // its candidates into localDescription instead of trickling them, which
+      // (combined with sending the pre-gather SDP) drops them entirely.
       // Only enable encoded transforms when BOTH peers support them, so a
       // mixed-browser call falls back cleanly to DTLS-SRTP instead of breaking.
       ...(S.frameEncActive ? { encodedInsertableStreams: true } : {}),
@@ -1411,7 +1414,9 @@ const WebRTC = {
     S.iceRestarting = false;
     S.pendingIce = [];   // candidates buffered until this PC has a remote description
     S.pc = new RTCPeerConnection(cfg);
-    S.localStream.getTracks().forEach(track => {
+    // Defensive: never throw if called before local media is ready (the caller
+    // gates on S.mediaReady, but a track-less PC must not hard-crash signaling).
+    (S.localStream ? S.localStream.getTracks() : []).forEach(track => {
       const sender = S.pc.addTrack(track, S.localStream);
       if (track.kind === 'video') this._tuneVideo(track, sender);
       if (S.frameEncActive) VideoE2E.wrapSender(sender);
@@ -1485,9 +1490,8 @@ const WebRTC = {
           });
         } catch (e) {}
       }
-      const offer = await S.pc.createOffer({ iceRestart: true });
-      await S.pc.setLocalDescription(offer);
-      S.socket.emit('offer', { sdp: offer });
+      await S.pc.setLocalDescription(await S.pc.createOffer({ iceRestart: true }));
+      S.socket.emit('offer', { sdp: S.pc.localDescription });
       Chat.sysMsg('Renegotiating connection…', 'warn');
       // If no answer lands and we don't reach 'connected', un-latch and retry.
       clearTimeout(S.iceRestartTimer);
@@ -1511,9 +1515,10 @@ const WebRTC = {
   async makeOffer() {
     await Ice.refresh();
     this.createPC();
-    const offer = await S.pc.createOffer();
-    await S.pc.setLocalDescription(offer);
-    S.socket.emit('offer', { sdp: offer });
+    await S.pc.setLocalDescription(await S.pc.createOffer());
+    // Emit the authoritative localDescription (carries any non-trickled
+    // candidates) rather than the pre-gather createOffer() result.
+    S.socket.emit('offer', { sdp: S.pc.localDescription });
   },
   async handleOffer(sdp) {
     // A second offer on an existing, live connection is an ICE-restart
@@ -1523,9 +1528,8 @@ const WebRTC = {
     if (dead) { await Ice.refresh(); this.createPC(); }
     await S.pc.setRemoteDescription(new RTCSessionDescription(sdp));
     await this._drainIce();
-    const answer = await S.pc.createAnswer();
-    await S.pc.setLocalDescription(answer);
-    S.socket.emit('answer', { sdp: answer });
+    await S.pc.setLocalDescription(await S.pc.createAnswer());
+    S.socket.emit('answer', { sdp: S.pc.localDescription });
   },
   async handleAnswer(sdp) {
     if (!S.pc) return;
@@ -1819,7 +1823,13 @@ const Signaling = {
         S.frameEncActive = !!(S.insertableStreams && S.peerFenc);
         await Crypto.deriveKeys(pubkey);
         setMediaBadge(S.frameEncActive);
-        if (S.isInitiator) await WebRTC.makeOffer();
+        if (S.isInitiator) {
+          // The peer's key can arrive before our own getUserMedia resolves;
+          // wait for local media so createPC has tracks to add (otherwise the
+          // offer is never built and the call hangs at "connecting").
+          if (S.mediaReady) { await S.mediaReady; }
+          if (S.localStream) await WebRTC.makeOffer();
+        }
       } catch(e) {
         console.error('[pubkey/deriveKeys]', e);
         toast('Key exchange failed: ' + e.message, 'error');
@@ -1868,7 +1878,10 @@ const Signaling = {
   async _startSession() {
     UI.showSession();
     document.getElementById('header-room-id').textContent = S.roomId;
-    const haveMedia = await Media.start();
+    // Expose media acquisition as a promise so the (initiator's) pubkey handler
+    // can wait for it before building the offer.
+    S.mediaReady = Media.start();
+    const haveMedia = await S.mediaReady;
     if (!haveMedia) {
       // No camera AND no microphone — do not advance signaling into a
       // track-less "connected" call that just looks broken.

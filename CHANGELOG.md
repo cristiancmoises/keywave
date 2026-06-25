@@ -4,6 +4,27 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project aims to
 follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.4.1] - 2026-06-25
+
+Fixes two connection bugs found by an automated two-browser (DevTools Protocol)
+verification of the real create/join/call flow.
+
+### Fixed
+- Initiator could crash before sending its offer: if the peer's public key
+  arrived before the initiator's own `getUserMedia` resolved, `createPC` ran
+  against a null `localStream` and threw, so no offer was ever sent and both
+  sides hung at "connecting". `makeOffer` now waits for local media to be ready
+  (`S.mediaReady`) and `createPC` tolerates a not-yet-ready stream.
+- The offerer's ICE candidates could be dropped: removed `iceCandidatePoolSize`
+  (a non-zero pool makes the offerer embed candidates instead of trickling them)
+  and the offer/answer now send the authoritative `localDescription` (which also
+  carries any embedded candidates) rather than the pre-gather SDP.
+
+### Verified
+- Two headless Chrome instances reach `connected` both ways, exchange ICE
+  candidates, run bidirectional per-frame AES-256-GCM (zero decrypt failures),
+  decode video, and round-trip chat — automated end-to-end.
+
 ## [1.4.0] - 2026-06-25
 
 Make calls actually connect (and stay connected) across real networks. This
