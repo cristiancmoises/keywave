@@ -4,6 +4,17 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project aims to
 follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.5.1] - 2026-06-25
+
+### Documentation
+- Added a Troubleshooting section covering the most common deploy traps, each
+  verified: a "reconnecting" loop with `Invalid transport` + websocket 400 means
+  the reverse proxy is not forwarding the WebSocket upgrade (the app and the
+  bundled Caddy both handle WebSocket correctly — fix the proxy or use the `tls`
+  profile); no cross-network video means TURN is not enabled; and seeing only
+  your own camera usually means a privacy-hardened browser or a single shared
+  webcam.
+
 ## [1.5.0] - 2026-06-25
 
 One-command, self-hosted deployment for real (phones / cross-network) calls —
