@@ -4,6 +4,21 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project aims to
 follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.4.3] - 2026-06-25
+
+Fixes the bundled TURN relay, verified end to end.
+
+### Fixed
+- The bundled coturn passed `--no-loopback-peers`, which coturn 4.6 does not
+  recognise, so the `turn` profile crash-looped (exit 255) and no relay ever
+  started. Removed it; `--external-ip` is now passed unquoted so it is parsed
+  correctly.
+
+### Verified
+- Stood up the bundled coturn and forced a call through it
+  (`KEYWAVE_FORCE_RELAY=1`): both peers used relay-only candidates, a relay
+  candidate pair was nominated, and encrypted media + video flowed end to end.
+
 ## [1.4.2] - 2026-06-25
 
 Fixes remote video not appearing (each peer saw only their own camera).

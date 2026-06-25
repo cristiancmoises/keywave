@@ -69,8 +69,8 @@ services:
         --static-auth-secret="$${KEYWAVE_TURN_SECRET:?set KEYWAVE_TURN_SECRET}"
         --realm=keywave --listening-port=3478
         --min-port=49160 --max-port=49200
-        --no-multicast-peers --no-loopback-peers
-        $${KEYWAVE_TURN_EXTERNAL_IP:+--external-ip="$${KEYWAVE_TURN_EXTERNAL_IP}"}
+        --no-multicast-peers
+        $${KEYWAVE_TURN_EXTERNAL_IP:+--external-ip=$${KEYWAVE_TURN_EXTERNAL_IP}}
 
 # ── Optional: put behind your existing Nginx Proxy Manager ───────────────────
 # Point NPM at http://keywave:5000 with WebSocket support enabled.
