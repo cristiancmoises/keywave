@@ -151,6 +151,31 @@ Lock `KEYWAVE_ALLOWED_ORIGINS` to your real origin in production. ICE servers
 are served to the client at `GET /config`; configure TURN there via the
 variables above (see "Making calls connect reliably").
 
+## Troubleshooting
+
+**Stuck on "reconnecting"; logs show `Invalid transport for session` and
+`transport=websocket … 400`.** Your reverse proxy is not forwarding the
+WebSocket upgrade, so Socket.IO can never leave long-polling and the session
+thrashes. The app itself supports WebSocket — this is purely a proxy setting.
+Fix it one of two ways:
+- Use the bundled Caddy, which forwards WebSocket automatically:
+  `docker compose --profile tls up -d` (set `KEYWAVE_DOMAIN`). Caddy is verified
+  to proxy the WebSocket transport correctly.
+- Or enable WebSocket on your existing proxy. Nginx Proxy Manager: turn on
+  **Websockets Support** for the host. Plain nginx: add
+  `proxy_http_version 1.1; proxy_set_header Upgrade $http_upgrade; proxy_set_header Connection "upgrade";`
+  on the `location` that proxies to `keywave:5000`.
+
+**Call shows connected (or "connecting") but no video between different
+networks.** You need a TURN relay. Run `./setup.sh` and start with
+`--profile turn` (see above), and open UDP/TCP 3478 + UDP 49160–49200. Verify
+with `docker logs keywave-turn | grep -i 'listener address'`.
+
+**Each person sees only their own camera.** Use a normal Chromium/Chrome or
+Firefox. Privacy-hardened builds (ungoogled-chromium, LibreWolf) can break
+WebRTC media so the remote stream never arrives. Also, a single physical webcam
+can only be opened by one browser at a time — use two devices or two cameras.
+
 ## How it works
 
 Peers exchange ephemeral ECDH P-256 public keys through the relay, derive
